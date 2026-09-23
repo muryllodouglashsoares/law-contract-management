@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# env files (nunca versionar segredos reais)
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+npm-debug.log*
+
+# test / coverage
+coverage/
+
+# editor
+.vscode/
+.idea/
+.DS_Store
+
+# prisma
+prisma/dev.db
+/generated/

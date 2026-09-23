@@ -1,0 +1,60 @@
+// Prisma schema — fundação inicial (auth + usuários)
+//
+// Multi-tenant por escritório: todo usuário pertence a um Office.
+// Os próximos módulos (clients, contract-templates, contracts,
+// contract-versions, documents, payments, notifications, audit)
+// deverão sempre referenciar officeId para isolamento de dados
+// entre escritórios.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  LAWYER
+  ASSISTANT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Escritório de advocacia — unidade organizacional principal (tenant).
+model Office {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  phone     String?
+  document  String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+
+  @@map("offices")
+}
+
+/// Usuário do sistema, sempre vinculado a um escritório (tenant).
+model User {
+  id           String     @id @default(uuid())
+  officeId     String
+  name         String
+  email        String     @unique
+  passwordHash String
+  role         UserRole   @default(ASSISTANT)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  office Office @relation(fields: [officeId], references: [id], onDelete: Cascade)
+
+  @@index([officeId])
+  @@map("users")
+}
