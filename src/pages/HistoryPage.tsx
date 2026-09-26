@@ -1,30 +1,43 @@
-import { useState } from 'react';
-import { Clock, Search, FileText, Users, CreditCard, Mail, Eye, PenTool, RefreshCw } from 'lucide-react';
-import { history } from '../data/mock';
+import { useEffect, useState } from 'react';
+import { Clock, Search, FileText, Users, CreditCard, Paperclip, BookOpen, RefreshCw, AlertCircle } from 'lucide-react';
+import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
+import { auditService } from '../services/audit';
+import type { AuditLogEntry } from '../types/api';
 
-const typeConfig: Record<string, { icon: typeof FileText; color: string; bg: string }> = {
-  create:  { icon: FileText, color: '#2563EB', bg: '#EFF6FF' },
-  pdf:     { icon: FileText, color: '#7C3AED', bg: '#F5F3FF' },
-  send:    { icon: Mail, color: '#059669', bg: '#F0FDF4' },
-  view:    { icon: Eye, color: '#D97706', bg: '#FFFBEB' },
-  sign:    { icon: PenTool, color: '#059669', bg: '#F0FDF4' },
-  payment: { icon: CreditCard, color: '#2563EB', bg: '#EFF6FF' },
-  update:  { icon: RefreshCw, color: '#64748B', bg: '#F1F5F9' },
+const entityConfig: Record<string, { icon: typeof FileText; color: string; bg: string }> = {
+  Contract:         { icon: FileText, color: '#2563EB', bg: '#EFF6FF' },
+  Client:           { icon: Users, color: '#D97706', bg: '#FFFBEB' },
+  Payment:          { icon: CreditCard, color: '#059669', bg: '#F0FDF4' },
+  Document:         { icon: Paperclip, color: '#7C3AED', bg: '#F5F3FF' },
+  ContractTemplate: { icon: BookOpen, color: '#2563EB', bg: '#EFF6FF' },
 };
+const defaultConfig = { icon: RefreshCw, color: '#64748B', bg: '#F1F5F9' };
+
+const PAGE_SIZE = 30;
 
 export default function HistoryPage() {
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(1);
 
-  const filtered = history.filter(h =>
-    h.user.toLowerCase().includes(search.toLowerCase()) ||
-    h.target.toLowerCase().includes(search.toLowerCase()) ||
-    h.action.toLowerCase().includes(search.toLowerCase())
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedSearch(search); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data, loading, error, refetch } = useApiQuery(
+    () => auditService.list({ page, pageSize: PAGE_SIZE, search: debouncedSearch || undefined }),
+    [page, debouncedSearch],
   );
 
-  const grouped: Record<string, typeof history> = {};
-  filtered.forEach(h => {
-    if (!grouped[h.date]) grouped[h.date] = [];
-    grouped[h.date].push(h);
+  const items = data?.data ?? [];
+  const pagination = data?.pagination;
+
+  const grouped: Record<string, AuditLogEntry[]> = {};
+  items.forEach(item => {
+    const dateKey = new Date(item.createdAt).toLocaleDateString('pt-BR');
+    if (!grouped[dateKey]) grouped[dateKey] = [];
+    grouped[dateKey].push(item);
   });
 
   return (
@@ -49,7 +62,20 @@ export default function HistoryPage() {
         />
       </div>
 
-      {Object.entries(grouped).map(([date, items]) => (
+      {error && (
+        <div className="mb-4 flex items-center justify-between gap-3 px-4 py-3 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+          <span className="flex items-center gap-2"><AlertCircle size={15} />{toErrorMessage(error, 'Não foi possível carregar o histórico.')}</span>
+          <button onClick={refetch} className="font-semibold underline flex-shrink-0">Tentar novamente</button>
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex items-center justify-center py-16">
+          <div className="w-6 h-6 rounded-full border-2 animate-spin" style={{ borderColor: 'var(--color-primary)', borderTopColor: 'transparent' }} />
+        </div>
+      )}
+
+      {!loading && Object.entries(grouped).map(([date, dateItems]) => (
         <div key={date} className="mb-8">
           <div className="flex items-center gap-3 mb-4">
             <div className="text-xs font-semibold text-slate-500 tabular-nums" style={{ fontFamily: 'var(--font-mono)' }}>{date}</div>
@@ -58,11 +84,12 @@ export default function HistoryPage() {
 
           <div className="relative pl-8">
             <div className="absolute left-3 top-0 bottom-0 w-px" style={{ backgroundColor: 'var(--color-border)' }} />
-            {items.map((item, i) => {
-              const cfg = typeConfig[item.type] ?? typeConfig.create;
+            {dateItems.map((item, i) => {
+              const cfg = entityConfig[item.entityType] ?? defaultConfig;
               const Icon = cfg.icon;
+              const time = new Date(item.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
               return (
-                <div key={item.id} className={`relative ${i < items.length - 1 ? 'mb-5' : ''}`}>
+                <div key={item.id} className={`relative ${i < dateItems.length - 1 ? 'mb-5' : ''}`}>
                   <div
                     className="absolute -left-5 w-6 h-6 rounded-full flex items-center justify-center border-2 border-white"
                     style={{ backgroundColor: cfg.bg }}
@@ -73,13 +100,13 @@ export default function HistoryPage() {
                     <div className="flex items-start justify-between">
                       <div>
                         <p className="text-sm text-slate-700">
-                          <span className="font-semibold text-slate-900">{item.user}</span>{' '}
+                          <span className="font-semibold text-slate-900">{item.actorName}</span>{' '}
                           {item.action}{' '}
-                          <span className="font-medium" style={{ color: 'var(--color-accent)' }}>{item.target}</span>
+                          <span className="font-medium" style={{ color: 'var(--color-accent)' }}>{item.entityLabel}</span>
                         </p>
                       </div>
                       <span className="text-xs tabular-nums ml-4 flex-shrink-0" style={{ color: 'var(--color-muted-foreground)', fontFamily: 'var(--font-mono)' }}>
-                        {item.time}
+                        {time}
                       </span>
                     </div>
                   </div>
@@ -90,10 +117,18 @@ export default function HistoryPage() {
         </div>
       ))}
 
-      {filtered.length === 0 && (
+      {!loading && items.length === 0 && !error && (
         <div className="text-center py-12">
           <Clock size={32} className="mx-auto mb-2 text-slate-300" />
           <p className="text-sm font-medium text-slate-500">Nenhuma atividade encontrada</p>
+        </div>
+      )}
+
+      {pagination && pagination.totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 mt-2">
+          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={pagination.page <= 1} className="px-3 py-1 text-xs border rounded bg-white text-slate-600 disabled:opacity-40" style={{ borderColor: 'var(--color-border)' }}>Anterior</button>
+          <span className="px-3 py-1 text-xs border rounded font-semibold text-white" style={{ borderColor: 'var(--color-primary)', backgroundColor: 'var(--color-primary)' }}>{pagination.page}</span>
+          <button onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))} disabled={pagination.page >= pagination.totalPages} className="px-3 py-1 text-xs border rounded bg-white text-slate-600 disabled:opacity-40" style={{ borderColor: 'var(--color-border)' }}>Próxima</button>
         </div>
       )}
     </div>

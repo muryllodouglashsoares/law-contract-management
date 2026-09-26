@@ -1,9 +1,19 @@
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
+import multipart from '@fastify/multipart';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { env } from './config/env';
+import { auditRoutes } from './modules/audit/audit.routes';
 import { authRoutes } from './modules/auth/auth.routes';
+import { clientRoutes } from './modules/clients/client.routes';
+import { contractTemplateRoutes } from './modules/contract-templates/contract-template.routes';
+import { contractRoutes } from './modules/contracts/contract.routes';
+import { dashboardRoutes } from './modules/dashboard/dashboard.routes';
+import { documentRoutes } from './modules/documents/document.routes';
+import { notificationRoutes } from './modules/notifications/notification.routes';
+import { officeRoutes } from './modules/offices/office.routes';
+import { paymentRoutes } from './modules/payments/payment.routes';
 import { userRoutes } from './modules/users/user.routes';
 import { prisma } from './shared/database/prisma';
 import { errorHandler } from './shared/http/error-handler';
@@ -45,6 +55,10 @@ export function buildApp(): FastifyInstance {
     sign: { expiresIn: env.JWT_EXPIRES_IN },
   });
 
+  app.register(multipart, {
+    limits: { fileSize: env.MAX_UPLOAD_SIZE_BYTES, files: 1 },
+  });
+
   app.setErrorHandler(errorHandler);
 
   // Health checks -----------------------------------------------------
@@ -65,17 +79,15 @@ export function buildApp(): FastifyInstance {
   // Módulos -------------------------------------------------------------
   app.register(authRoutes, { prefix: '/auth' });
   app.register(userRoutes, { prefix: '/users' });
-
-  // Próximos módulos (não implementados nesta etapa, apenas planejados):
-  // app.register(officeRoutes, { prefix: '/offices' });
-  // app.register(clientRoutes, { prefix: '/clients' });
-  // app.register(contractTemplateRoutes, { prefix: '/contract-templates' });
-  // app.register(contractRoutes, { prefix: '/contracts' });
-  // app.register(documentRoutes, { prefix: '/documents' });
-  // app.register(paymentRoutes, { prefix: '/payments' });
-  // app.register(notificationRoutes, { prefix: '/notifications' });
-  // app.register(auditRoutes, { prefix: '/audit' });
-  // app.register(dashboardRoutes, { prefix: '/dashboard' });
+  app.register(officeRoutes, { prefix: '/offices' });
+  app.register(clientRoutes, { prefix: '/clients' });
+  app.register(contractTemplateRoutes, { prefix: '/contract-templates' });
+  app.register(contractRoutes, { prefix: '/contracts' });
+  app.register(documentRoutes, { prefix: '/documents' });
+  app.register(paymentRoutes, { prefix: '/payments' });
+  app.register(notificationRoutes, { prefix: '/notifications' });
+  app.register(auditRoutes, { prefix: '/audit' });
+  app.register(dashboardRoutes, { prefix: '/dashboard' });
 
   return app;
 }

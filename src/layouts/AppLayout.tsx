@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, FileText, BookTemplate, FolderOpen, CreditCard,
-  Bell, Clock, Settings, LogOut, ChevronRight, Scale, Menu, X, Search,
+  Bell, Clock, Settings, LogOut, Scale, Menu, X, Search,
   ChevronDown
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { useApiQuery } from '../hooks/useApiQuery';
+import { notificationsService } from '../services/notifications';
 
 const navGroups = [
   {
@@ -21,7 +24,7 @@ const navGroups = [
   {
     label: 'Gestão',
     items: [
-      { to: '/notificacoes', icon: Bell, label: 'Notificações', badge: 3 },
+      { to: '/notificacoes', icon: Bell, label: 'Notificações' },
       { to: '/historico', icon: Clock, label: 'Histórico' },
     ],
   },
@@ -33,11 +36,39 @@ const navGroups = [
   },
 ];
 
+const ROLE_LABELS: Record<string, string> = {
+  ADMIN: 'Administrador',
+  LAWYER: 'Advogado(a)',
+  ASSISTANT: 'Assistente',
+};
+
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  const first = parts[0]?.[0] ?? '';
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '';
+  return (first + last).toUpperCase();
+}
+
 export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
-  const handleLogout = () => navigate('/login');
+  const { data: notificationsSummary } = useApiQuery(
+    () => notificationsService.list({ pageSize: 1, read: false }),
+    [],
+  );
+  const unreadCount = notificationsSummary?.unreadCount ?? 0;
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  const initials = user ? initialsOf(user.name) : '';
+  const roleLine = user
+    ? [ROLE_LABELS[user.role] ?? user.role, user.oabNumber].filter(Boolean).join(' · ')
+    : '';
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ backgroundColor: 'var(--color-background)' }}>
@@ -95,9 +126,9 @@ export default function AppLayout() {
                 >
                   <item.icon size={16} className="flex-shrink-0" />
                   <span className="flex-1">{item.label}</span>
-                  {item.badge && (
+                  {item.to === '/notificacoes' && unreadCount > 0 && (
                     <span className="text-xs rounded-full px-1.5 py-0.5 font-semibold" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
-                      {item.badge}
+                      {unreadCount}
                     </span>
                   )}
                 </NavLink>
@@ -108,16 +139,19 @@ export default function AppLayout() {
 
         {/* User profile */}
         <div className="border-t p-3" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center gap-2.5 p-2 rounded-md hover:bg-slate-50 cursor-pointer group">
+          <NavLink
+            to="/configuracoes"
+            className="flex items-center gap-2.5 p-2 rounded-md hover:bg-slate-50 cursor-pointer group"
+          >
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{ backgroundColor: 'var(--color-primary)' }}>
-              MR
+              {initials}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold truncate text-slate-900">Muryllo Rocha</div>
-              <div className="text-xs truncate" style={{ color: 'var(--color-muted-foreground)' }}>Advogado · OAB/SP 123.456</div>
+              <div className="text-sm font-semibold truncate text-slate-900">{user?.name}</div>
+              <div className="text-xs truncate" style={{ color: 'var(--color-muted-foreground)' }}>{roleLine}</div>
             </div>
             <ChevronDown size={14} className="text-slate-400 flex-shrink-0" />
-          </div>
+          </NavLink>
           <button
             onClick={handleLogout}
             className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm font-medium mt-1 text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors"
@@ -149,10 +183,12 @@ export default function AppLayout() {
           <div className="ml-auto flex items-center gap-2">
             <NavLink to="/notificacoes" className="relative p-2 rounded-md hover:bg-slate-100 text-slate-500">
               <Bell size={18} />
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500" />
+              {unreadCount > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500" />
+              )}
             </NavLink>
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: 'var(--color-primary)' }}>
-              MR
+              {initials}
             </div>
           </div>
         </header>

@@ -1,23 +1,81 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Filter, ChevronRight, Users, Building2, User } from 'lucide-react';
-import { clients } from '../data/mock';
+import { Plus, Search, ChevronRight, Users, Building2, User, AlertCircle } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
+import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
+import { clientsService } from '../services/clients';
+import type { ClientType } from '../types/api';
 
-const filterOptions = ['Todos', 'Ativo', 'Inativo'];
+const filterOptions: { label: string; value: 'ativo' | 'inativo' | undefined }[] = [
+  { label: 'Todos', value: undefined },
+  { label: 'Ativo', value: 'ativo' },
+  { label: 'Inativo', value: 'inativo' },
+];
+
+const PAGE_SIZE = 20;
+
+interface NewClientForm {
+  type: ClientType;
+  name: string;
+  document: string;
+  email: string;
+  phone: string;
+  address: string;
+  notes: string;
+}
+
+const EMPTY_FORM: NewClientForm = { type: 'PF', name: '', document: '', email: '', phone: '', address: '', notes: '' };
 
 export default function ClientsPage() {
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('Todos');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [filter, setFilter] = useState<'ativo' | 'inativo' | undefined>(undefined);
+  const [page, setPage] = useState(1);
   const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState<NewClientForm>(EMPTY_FORM);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
-  const filtered = clients.filter(c => {
-    const matchSearch = c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.document.includes(search) || c.email.toLowerCase().includes(search.toLowerCase());
-    const matchFilter = filter === 'Todos' || c.status === filter.toLowerCase();
-    return matchSearch && matchFilter;
-  });
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [search]);
+
+  const { data, loading, error, refetch } = useApiQuery(
+    () => clientsService.list({ page, pageSize: PAGE_SIZE, search: debouncedSearch || undefined, status: filter }),
+    [page, debouncedSearch, filter],
+  );
+
+  const clients = data?.data ?? [];
+  const pagination = data?.pagination;
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    setFormError(null);
+    setSubmitting(true);
+    try {
+      await clientsService.create({
+        type: form.type,
+        name: form.name,
+        document: form.document,
+        email: form.email,
+        phone: form.phone || undefined,
+        address: form.address || undefined,
+        notes: form.notes || undefined,
+      });
+      setShowModal(false);
+      setForm(EMPTY_FORM);
+      refetch();
+    } catch (err) {
+      setFormError(toErrorMessage(err, 'Não foi possível cadastrar o cliente.'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -26,7 +84,7 @@ export default function ClientsPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-900" style={{ fontFamily: 'var(--font-display)' }}>Clientes</h1>
           <p className="text-sm mt-0.5" style={{ color: 'var(--color-muted-foreground)' }}>
-            {clients.length} clientes cadastrados
+            {pagination ? `${pagination.total} clientes cadastrados` : 'Carregando...'}
           </p>
         </div>
         <button
@@ -53,23 +111,27 @@ export default function ClientsPage() {
         <div className="flex items-center gap-2">
           {filterOptions.map(f => (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
+              key={f.label}
+              onClick={() => { setFilter(f.value); setPage(1); }}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                filter === f
+                filter === f.value
                   ? 'text-white border-transparent'
                   : 'text-slate-600 bg-white hover:bg-slate-50'
               }`}
-              style={filter === f ? { backgroundColor: 'var(--color-primary)', borderColor: 'var(--color-primary)' } : { borderColor: 'var(--color-border)' }}
+              style={filter === f.value ? { backgroundColor: 'var(--color-primary)', borderColor: 'var(--color-primary)' } : { borderColor: 'var(--color-border)' }}
             >
-              {f}
+              {f.label}
             </button>
           ))}
         </div>
-        <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg bg-white hover:bg-slate-50 text-slate-600 transition-colors" style={{ borderColor: 'var(--color-border)' }}>
-          <Filter size={13} /> Filtros
-        </button>
       </div>
+
+      {error && (
+        <div className="mb-4 flex items-center justify-between gap-3 px-4 py-3 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+          <span className="flex items-center gap-2"><AlertCircle size={15} />{toErrorMessage(error, 'Não foi possível carregar os clientes.')}</span>
+          <button onClick={refetch} className="font-semibold underline flex-shrink-0">Tentar novamente</button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: 'var(--color-border)' }}>
@@ -86,7 +148,11 @@ export default function ClientsPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {loading ? (
+              <tr><td colSpan={7} className="px-5 py-16 text-center">
+                <div className="w-6 h-6 mx-auto rounded-full border-2 animate-spin" style={{ borderColor: 'var(--color-primary)', borderTopColor: 'transparent' }} />
+              </td></tr>
+            ) : clients.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-5 py-12 text-center">
                   <Users size={32} className="mx-auto mb-2 text-slate-300" />
@@ -94,7 +160,7 @@ export default function ClientsPage() {
                   <p className="text-xs mt-1" style={{ color: 'var(--color-muted-foreground)' }}>Tente outros termos de busca ou adicione um novo cliente</p>
                 </td>
               </tr>
-            ) : filtered.map((c) => (
+            ) : clients.map((c) => (
               <tr
                 key={c.id}
                 className="border-b last:border-0 hover:bg-slate-50 cursor-pointer transition-colors"
@@ -123,13 +189,15 @@ export default function ClientsPage() {
                   <div className="text-xs text-slate-400 mt-0.5">{c.phone}</div>
                 </td>
                 <td className="px-5 py-3.5 hidden lg:table-cell text-center">
-                  <span className="text-sm font-semibold text-slate-700">{c.contracts}</span>
+                  <span className="text-sm font-semibold text-slate-700">{c.contractsCount}</span>
                 </td>
                 <td className="px-5 py-3.5">
                   <StatusBadge status={c.status} size="sm" />
                 </td>
                 <td className="px-5 py-3.5 hidden md:table-cell">
-                  <span className="text-xs tabular-nums" style={{ color: 'var(--color-muted-foreground)', fontFamily: 'var(--font-mono)' }}>{c.lastActivity}</span>
+                  <span className="text-xs tabular-nums" style={{ color: 'var(--color-muted-foreground)', fontFamily: 'var(--font-mono)' }}>
+                    {new Date(c.lastActivity).toLocaleDateString('pt-BR')}
+                  </span>
                 </td>
                 <td className="px-5 py-3.5 text-right">
                   <button
@@ -145,15 +213,31 @@ export default function ClientsPage() {
         </table>
 
         {/* Pagination */}
-        {filtered.length > 0 && (
+        {pagination && pagination.total > 0 && (
           <div className="flex items-center justify-between px-5 py-3 border-t" style={{ borderColor: 'var(--color-border)', backgroundColor: '#FAFAFA' }}>
             <span className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>
-              Exibindo {filtered.length} de {clients.length} clientes
+              Exibindo {clients.length} de {pagination.total} clientes
             </span>
             <div className="flex items-center gap-1">
-              <button className="px-3 py-1 text-xs border rounded bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-40" style={{ borderColor: 'var(--color-border)' }} disabled>Anterior</button>
-              <button className="px-3 py-1 text-xs border rounded font-semibold text-white" style={{ borderColor: 'var(--color-primary)', backgroundColor: 'var(--color-primary)' }}>1</button>
-              <button className="px-3 py-1 text-xs border rounded bg-white hover:bg-slate-50 text-slate-600" style={{ borderColor: 'var(--color-border)' }}>Próxima</button>
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={pagination.page <= 1}
+                className="px-3 py-1 text-xs border rounded bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-40"
+                style={{ borderColor: 'var(--color-border)' }}
+              >
+                Anterior
+              </button>
+              <span className="px-3 py-1 text-xs border rounded font-semibold text-white" style={{ borderColor: 'var(--color-primary)', backgroundColor: 'var(--color-primary)' }}>
+                {pagination.page}
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+                disabled={pagination.page >= pagination.totalPages}
+                className="px-3 py-1 text-xs border rounded bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-40"
+                style={{ borderColor: 'var(--color-border)' }}
+              >
+                Próxima
+              </button>
             </div>
           </div>
         )}
@@ -162,56 +246,110 @@ export default function ClientsPage() {
       {/* New Client Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+          <form onSubmit={handleCreate} className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
             <div className="px-6 py-5 border-b" style={{ borderColor: 'var(--color-border)' }}>
               <h2 className="text-base font-bold text-slate-900" style={{ fontFamily: 'var(--font-display)' }}>Novo cliente</h2>
               <p className="text-sm mt-0.5" style={{ color: 'var(--color-muted-foreground)' }}>Preencha as informações do cliente</p>
             </div>
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
+              {formError && (
+                <div className="flex items-center gap-2 px-3 py-2.5 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+                  <AlertCircle size={15} className="flex-shrink-0" /> {formError}
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Tipo *</label>
+                  <div className="flex gap-2">
+                    {(['PF', 'PJ'] as const).map(t => (
+                      <button
+                        type="button"
+                        key={t}
+                        onClick={() => setForm(f => ({ ...f, type: t }))}
+                        className={`flex-1 px-3 py-2 text-sm font-medium border rounded-lg transition-colors ${
+                          form.type === t ? 'text-white border-transparent' : 'text-slate-600 bg-white hover:bg-slate-50'
+                        }`}
+                        style={form.type === t ? { backgroundColor: 'var(--color-primary)' } : { borderColor: 'var(--color-border)' }}
+                      >
+                        {t === 'PF' ? 'Pessoa Física' : 'Pessoa Jurídica'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="col-span-2">
                   <label className="block text-xs font-medium text-slate-700 mb-1.5">Nome completo / Razão social *</label>
-                  <input className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="João da Silva" />
+                  <input
+                    required
+                    value={form.name}
+                    onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="João da Silva"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1.5">CPF / CNPJ *</label>
-                  <input className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="000.000.000-00" />
+                  <input
+                    required
+                    value={form.document}
+                    onChange={e => setForm(f => ({ ...f, document: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="000.000.000-00"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1.5">Telefone</label>
-                  <input className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="(11) 99999-9999" />
+                  <input
+                    value={form.phone}
+                    onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="(11) 99999-9999"
+                  />
                 </div>
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-slate-700 mb-1.5">E-mail *</label>
-                  <input type="email" className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="cliente@email.com" />
+                  <input
+                    required
+                    type="email"
+                    value={form.email}
+                    onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="cliente@email.com"
+                  />
                 </div>
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-slate-700 mb-1.5">Endereço</label>
-                  <input className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="Rua, número, bairro, cidade — UF" />
+                  <input
+                    value={form.address}
+                    onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} placeholder="Rua, número, bairro, cidade — UF"
+                  />
                 </div>
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-slate-700 mb-1.5">Observações</label>
-                  <textarea rows={2} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 resize-none" style={{ borderColor: 'var(--color-border)' }} placeholder="Informações relevantes..." />
+                  <textarea
+                    rows={2}
+                    value={form.notes}
+                    onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 resize-none" style={{ borderColor: 'var(--color-border)' }} placeholder="Informações relevantes..."
+                  />
                 </div>
               </div>
             </div>
             <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: 'var(--color-border)' }}>
               <button
-                onClick={() => setShowModal(false)}
+                type="button"
+                onClick={() => { setShowModal(false); setForm(EMPTY_FORM); setFormError(null); }}
                 className="px-4 py-2 text-sm font-medium border rounded-lg hover:bg-slate-50 text-slate-600 transition-colors"
                 style={{ borderColor: 'var(--color-border)' }}
               >
                 Cancelar
               </button>
               <button
-                onClick={() => setShowModal(false)}
-                className="px-4 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 transition-opacity"
+                type="submit"
+                disabled={submitting}
+                className="px-4 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-60"
                 style={{ backgroundColor: 'var(--color-primary)' }}
               >
-                Cadastrar cliente
+                {submitting ? 'Cadastrando...' : 'Cadastrar cliente'}
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
     </div>

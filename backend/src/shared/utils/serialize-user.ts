@@ -8,6 +8,8 @@ export interface PublicUser {
   id: string;
   name: string;
   email: string;
+  phone: string | null;
+  oabNumber: string | null;
   role: User['role'];
   status: User['status'];
   officeId: string;
@@ -20,6 +22,8 @@ export function toPublicUser(user: User): PublicUser {
     id: user.id,
     name: user.name,
     email: user.email,
+    phone: user.phone,
+    oabNumber: user.oabNumber,
     role: user.role,
     status: user.status,
     officeId: user.officeId,

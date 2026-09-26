@@ -27,6 +27,14 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
+
+  // Diretório onde os arquivos de documentos ficam armazenados em disco
+  // (desenvolvimento). Ver src/shared/storage/local-file-storage.ts.
+  UPLOADS_DIR: z.string().default('./uploads'),
+
+  // Tamanho máximo de upload de um documento, em bytes. Mantido alinhado
+  // com o texto já exibido na tela de Documentos ("Máx. 10 MB por arquivo").
+  MAX_UPLOAD_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
 });
 
 export type Env = z.infer<typeof envSchema>;

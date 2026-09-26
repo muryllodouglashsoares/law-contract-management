@@ -10,6 +10,8 @@ function makeUser(overrides: Partial<User> = {}): User {
     officeId: 'office-1',
     name: 'Usuário Teste',
     email: 'user@example.com',
+    phone: null,
+    oabNumber: null,
     passwordHash: 'hash',
     role: 'LAWYER',
     status: 'ACTIVE',

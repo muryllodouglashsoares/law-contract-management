@@ -1,7 +1,8 @@
 import type { PrismaClient, User } from '@prisma/client';
 
-import { NotFoundError } from '../../shared/errors';
-import type { UpdateMeBody } from './user.schemas';
+import { comparePassword, hashPassword } from '../../shared/auth/password';
+import { AuthenticationError, NotFoundError } from '../../shared/errors';
+import type { ChangePasswordBody, UpdateMeBody } from './user.schemas';
 
 export class UserService {
   constructor(private readonly prisma: Pick<PrismaClient, 'user'>) {}
@@ -25,5 +26,19 @@ export class UserService {
       where: { id: userId },
       data,
     });
+  }
+
+  /** Exige a senha atual correta antes de gravar a nova — nunca confie
+   * apenas em o usuário estar autenticado para trocar a própria senha. */
+  async changePassword(userId: string, data: ChangePasswordBody): Promise<void> {
+    const user = await this.getById(userId);
+
+    const isCurrentPasswordValid = await comparePassword(data.currentPassword, user.passwordHash);
+    if (!isCurrentPasswordValid) {
+      throw new AuthenticationError('Senha atual incorreta');
+    }
+
+    const passwordHash = await hashPassword(data.newPassword);
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
   }
 }

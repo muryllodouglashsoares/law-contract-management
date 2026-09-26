@@ -1,26 +1,205 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Send, Download, FileText, Check, Eye, Edit2, CreditCard } from 'lucide-react';
-import { contracts, payments } from '../data/mock';
+import {
+  ArrowLeft, Send, Download, FileText, Check, Edit2, CreditCard,
+  Clock, AlertCircle, Upload, Paperclip
+} from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
+import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
+import { contractsService } from '../services/contracts';
+import { paymentsService } from '../services/payments';
+import { auditService } from '../services/audit';
+import { documentsService } from '../services/documents';
+import type { ContractStatusApi, DocumentCategoryApi, Payment, PaymentMethodApi } from '../types/api';
 
-const timeline = [
-  { status: 'Criado', date: '01/09/2026 14:32', done: true },
-  { status: 'Enviado', date: '01/09/2026 15:05', done: true },
-  { status: 'Visualizado', date: '02/09/2026 09:12', done: true },
-  { status: 'Assinado', date: '02/09/2026 10:02', done: true },
-  { status: 'Ativo', date: '03/09/2026', done: true },
+const STATUS_OPTIONS: { value: ContractStatusApi; label: string }[] = [
+  { value: 'rascunho', label: 'Rascunho' },
+  { value: 'pronto_envio', label: 'Pronto p/ envio' },
+  { value: 'enviado', label: 'Enviado' },
+  { value: 'em_revisao', label: 'Em revisão' },
+  { value: 'assinado', label: 'Assinado' },
+  { value: 'ativo', label: 'Ativo' },
+  { value: 'encerrado', label: 'Encerrado' },
+  { value: 'cancelado', label: 'Cancelado' },
 ];
 
+const PAYMENT_METHODS: PaymentMethodApi[] = ['PIX', 'Transferência', 'Boleto', 'Dinheiro', 'Cartão'];
+const DOC_CATEGORIES: DocumentCategoryApi[] = ['contrato', 'procuração', 'documento', 'outro'];
+
 export default function ContractDetailPage() {
-  const { id } = useParams();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('resumo');
 
-  const contract = contracts.find(c => c.id === Number(id)) ?? contracts[0];
-  const contractPayments = payments.filter(p => p.contractId === contract.id);
+  const { data: contractData, loading: loadingContract, error: contractError, refetch: refetchContract } = useApiQuery(
+    () => contractsService.getById(id!),
+    [id],
+  );
+  const contract = contractData?.contract;
+
+  const { data: paymentsData, refetch: refetchPayments } = useApiQuery(
+    () => paymentsService.list({ contractId: id, pageSize: 50 }),
+    [id],
+  );
+  const { data: historyData } = useApiQuery(
+    () => auditService.list({ entityType: 'Contract', entityId: id, pageSize: 30 }),
+    [id],
+  );
+  const { data: documentsData, refetch: refetchDocuments } = useApiQuery(
+    () => documentsService.list({ contractId: id, pageSize: 50 }),
+    [id],
+  );
+
+  const contractPayments = paymentsData?.data ?? [];
   const totalPaid = contractPayments.filter(p => p.status === 'pago').reduce((s, p) => s + p.value, 0);
-  const totalPending = contractPayments.filter(p => p.status !== 'pago').reduce((s, p) => s + p.value, 0);
+  const totalPending = contractPayments.filter(p => p.status !== 'pago' && p.status !== 'cancelado').reduce((s, p) => s + p.value, 0);
+  const history = historyData?.data ?? [];
+  const contractDocs = documentsData?.data ?? [];
+
+  // --- Status change -------------------------------------------------
+  const [statusDraft, setStatusDraft] = useState<ContractStatusApi | ''>('');
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+
+  async function applyStatus(next: ContractStatusApi) {
+    setStatusError(null);
+    setStatusUpdating(true);
+    try {
+      await contractsService.updateStatus(id!, next);
+      await refetchContract();
+      setStatusDraft('');
+    } catch (err) {
+      setStatusError(toErrorMessage(err, 'Não foi possível alterar o status.'));
+    } finally {
+      setStatusUpdating(false);
+    }
+  }
+
+  // --- Edit contract (só em rascunho) ---------------------------------
+  const [showEdit, setShowEdit] = useState(false);
+  const [editForm, setEditForm] = useState({ value: '', object: '', startDate: '', deadline: '', conditions: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  function openEdit() {
+    if (!contract) return;
+    setEditForm({
+      value: String(contract.value),
+      object: contract.object,
+      startDate: contract.startDate.slice(0, 10),
+      deadline: contract.termText ?? '',
+      conditions: contract.conditions ?? '',
+    });
+    setEditError(null);
+    setShowEdit(true);
+  }
+
+  async function handleEditSave() {
+    setEditError(null);
+    setEditSaving(true);
+    try {
+      await contractsService.update(id!, {
+        value: Number(editForm.value),
+        object: editForm.object,
+        startDate: editForm.startDate,
+        termText: editForm.deadline || undefined,
+        conditions: editForm.conditions || undefined,
+      });
+      setShowEdit(false);
+      refetchContract();
+    } catch (err) {
+      setEditError(toErrorMessage(err, 'Não foi possível salvar as alterações.'));
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  // --- Registrar novo pagamento ---------------------------------------
+  const [showNewPayment, setShowNewPayment] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({ installmentNumber: '1', installmentTotal: '1', value: '', dueDate: '' });
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  async function handleCreatePayment() {
+    setPaymentError(null);
+    setPaymentSaving(true);
+    try {
+      await paymentsService.create({
+        contractId: id!,
+        installmentNumber: Number(paymentForm.installmentNumber),
+        installmentTotal: Number(paymentForm.installmentTotal),
+        value: Number(paymentForm.value),
+        dueDate: paymentForm.dueDate,
+      });
+      setShowNewPayment(false);
+      setPaymentForm({ installmentNumber: '1', installmentTotal: '1', value: '', dueDate: '' });
+      refetchPayments();
+    } catch (err) {
+      setPaymentError(toErrorMessage(err, 'Não foi possível registrar a parcela.'));
+    } finally {
+      setPaymentSaving(false);
+    }
+  }
+
+  // --- Registrar recebimento de uma parcela ---------------------------
+  const [registeringPayment, setRegisteringPayment] = useState<Payment | null>(null);
+  const [registerMethod, setRegisterMethod] = useState<PaymentMethodApi>('PIX');
+  const [registerSaving, setRegisterSaving] = useState(false);
+
+  async function handleRegisterPayment() {
+    if (!registeringPayment) return;
+    setRegisterSaving(true);
+    try {
+      await paymentsService.registerPayment(registeringPayment.id, { method: registerMethod });
+      setRegisteringPayment(null);
+      refetchPayments();
+    } catch (err) {
+      window.alert(toErrorMessage(err, 'Não foi possível registrar o pagamento.'));
+    } finally {
+      setRegisterSaving(false);
+    }
+  }
+
+  // --- Upload de documento ---------------------------------------------
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadCategory, setUploadCategory] = useState<DocumentCategoryApi>('documento');
+  const [uploading, setUploading] = useState(false);
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !id) return;
+    setUploading(true);
+    try {
+      await documentsService.upload({ contractId: id, category: uploadCategory, file });
+      refetchDocuments();
+    } catch (err) {
+      window.alert(toErrorMessage(err, 'Não foi possível enviar o documento.'));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  if (loadingContract) {
+    return (
+      <div className="p-6 max-w-5xl mx-auto flex items-center justify-center py-24">
+        <div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: 'var(--color-primary)', borderTopColor: 'transparent' }} />
+      </div>
+    );
+  }
+
+  if (contractError || !contract) {
+    return (
+      <div className="p-6 max-w-5xl mx-auto">
+        <button onClick={() => navigate('/contratos')} className="flex items-center gap-2 text-sm mb-4" style={{ color: 'var(--color-muted-foreground)' }}>
+          <ArrowLeft size={14} /> Contratos
+        </button>
+        <div className="flex items-center gap-2 px-4 py-3 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+          <AlertCircle size={15} /> {toErrorMessage(contractError, 'Contrato não encontrado.')}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -33,34 +212,47 @@ export default function ContractDetailPage() {
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-mono font-semibold px-2 py-0.5 bg-slate-100 text-slate-600 rounded">#{contract.id}</span>
+              <span className="text-xs font-mono font-semibold px-2 py-0.5 bg-slate-100 text-slate-600 rounded">#{contract.number}</span>
               <StatusBadge status={contract.status} />
             </div>
-            <h1 className="text-xl font-bold text-slate-900 mt-2" style={{ fontFamily: 'var(--font-display)' }}>{contract.template}</h1>
+            <h1 className="text-xl font-bold text-slate-900 mt-2" style={{ fontFamily: 'var(--font-display)' }}>{contract.template.name}</h1>
             <p className="text-sm mt-0.5" style={{ color: 'var(--color-muted-foreground)' }}>
-              Cliente: <span className="font-medium text-slate-700 cursor-pointer hover:underline" onClick={() => navigate(`/clientes/${contract.clientId}`)}>{contract.client}</span>
+              Cliente: <span className="font-medium text-slate-700 cursor-pointer hover:underline" onClick={() => navigate(`/clientes/${contract.client.id}`)}>{contract.client.name}</span>
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <button className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border rounded-lg hover:bg-slate-50 transition-colors text-slate-600" style={{ borderColor: 'var(--color-border)' }}>
-              <Eye size={14} /> Visualizar PDF
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border rounded-lg hover:bg-slate-50 transition-colors text-slate-600" style={{ borderColor: 'var(--color-border)' }}>
-              <Download size={14} /> Baixar PDF
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90" style={{ backgroundColor: 'var(--color-primary)' }}>
-              <Send size={14} /> Enviar
+            <select
+              value={statusDraft || contract.status}
+              onChange={e => setStatusDraft(e.target.value as ContractStatusApi)}
+              className="px-3 py-2 text-sm border rounded-lg bg-white text-slate-600"
+              style={{ borderColor: 'var(--color-border)' }}
+            >
+              {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+            <button
+              disabled={!statusDraft || statusDraft === contract.status || statusUpdating}
+              onClick={() => statusDraft && applyStatus(statusDraft)}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 disabled:opacity-40"
+              style={{ backgroundColor: 'var(--color-primary)' }}
+            >
+              <Send size={14} /> {statusUpdating ? 'Aplicando...' : 'Aplicar status'}
             </button>
           </div>
         </div>
 
+        {statusError && (
+          <div className="mt-3 flex items-center gap-2 px-3 py-2.5 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+            <AlertCircle size={15} className="flex-shrink-0" /> {statusError}
+          </div>
+        )}
+
         {/* Key metrics */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5 pt-5 border-t" style={{ borderColor: 'var(--color-border)' }}>
           {[
-            { label: 'Valor', value: `R$ ${contract.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-            { label: 'Início', value: contract.createdAt },
-            { label: 'Última atualização', value: contract.updatedAt },
-            { label: 'Responsável', value: 'Muryllo Rocha' },
+            { label: 'Valor', value: contract.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) },
+            { label: 'Início', value: new Date(contract.startDate).toLocaleDateString('pt-BR') },
+            { label: 'Última atualização', value: new Date(contract.updatedAt).toLocaleDateString('pt-BR') },
+            { label: 'Responsável', value: contract.responsible.name },
           ].map(m => (
             <div key={m.label}>
               <div className="text-xs text-slate-400 mb-0.5">{m.label}</div>
@@ -76,7 +268,6 @@ export default function ContractDetailPage() {
           {[
             { key: 'resumo', label: 'Resumo' },
             { key: 'documento', label: 'Documento' },
-            { key: 'status', label: 'Status' },
             { key: 'pagamentos', label: 'Pagamentos' },
             { key: 'historico', label: 'Histórico' },
           ].map(t => (
@@ -99,16 +290,16 @@ export default function ContractDetailPage() {
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Dados do contrato</h3>
                 <div className="space-y-3">
                   {[
-                    { label: 'Número', value: `#${contract.id}` },
-                    { label: 'Modelo', value: contract.template },
-                    { label: 'Cliente', value: contract.client },
-                    { label: 'Valor total', value: `R$ ${contract.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-                    { label: 'Status', value: <StatusBadge status={contract.status} size="sm" /> },
-                    { label: 'Responsável', value: 'Muryllo Rocha · OAB/SP 123.456' },
+                    { label: 'Número', value: `#${contract.number}` },
+                    { label: 'Modelo', value: contract.template.name },
+                    { label: 'Cliente', value: contract.client.name },
+                    { label: 'Objeto', value: contract.object },
+                    { label: 'Valor total', value: contract.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) },
+                    { label: 'Responsável', value: contract.responsible.name },
                   ].map(f => (
-                    <div key={f.label} className="flex items-start justify-between py-2 border-b last:border-0" style={{ borderColor: 'var(--color-border)' }}>
-                      <span className="text-xs text-slate-400 flex-shrink-0 w-32">{f.label}</span>
-                      <span className="text-sm font-medium text-slate-800 text-right">{typeof f.value === 'string' ? f.value : f.value}</span>
+                    <div key={f.label} className="flex items-start justify-between gap-3 py-2 border-b last:border-0" style={{ borderColor: 'var(--color-border)' }}>
+                      <span className="text-xs text-slate-400 flex-shrink-0 w-28">{f.label}</span>
+                      <span className="text-sm font-medium text-slate-800 text-right">{f.value}</span>
                     </div>
                   ))}
                 </div>
@@ -116,21 +307,26 @@ export default function ContractDetailPage() {
               <div>
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Ações rápidas</h3>
                 <div className="space-y-2">
-                  {[
-                    { icon: Send, label: 'Enviar para assinatura', color: 'var(--color-primary)' },
-                    { icon: Download, label: 'Baixar PDF', color: '#475569' },
-                    { icon: Edit2, label: 'Editar contrato', color: '#475569' },
-                    { icon: CreditCard, label: 'Registrar pagamento', color: '#059669' },
-                  ].map(action => (
-                    <button
-                      key={action.label}
-                      className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left"
-                      style={{ borderColor: 'var(--color-border)' }}
-                    >
-                      <action.icon size={15} style={{ color: action.color }} />
-                      <span className="text-sm font-medium text-slate-700">{action.label}</span>
+                  {contract.status === 'rascunho' && (
+                    <button onClick={openEdit} className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left" style={{ borderColor: 'var(--color-border)' }}>
+                      <Edit2 size={15} style={{ color: '#475569' }} />
+                      <span className="text-sm font-medium text-slate-700">Editar contrato</span>
                     </button>
-                  ))}
+                  )}
+                  {(contract.status === 'rascunho' || contract.status === 'pronto_envio') && (
+                    <button onClick={() => applyStatus('enviado')} disabled={statusUpdating} className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left disabled:opacity-50" style={{ borderColor: 'var(--color-border)' }}>
+                      <Send size={15} style={{ color: 'var(--color-primary)' }} />
+                      <span className="text-sm font-medium text-slate-700">Enviar para assinatura</span>
+                    </button>
+                  )}
+                  <button onClick={() => setShowNewPayment(true)} className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left" style={{ borderColor: 'var(--color-border)' }}>
+                    <CreditCard size={15} style={{ color: '#059669' }} />
+                    <span className="text-sm font-medium text-slate-700">Registrar parcela / pagamento</span>
+                  </button>
+                  <button onClick={() => setActiveTab('documento')} className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left" style={{ borderColor: 'var(--color-border)' }}>
+                    <FileText size={15} style={{ color: '#475569' }} />
+                    <span className="text-sm font-medium text-slate-700">Ver documento gerado</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -138,74 +334,79 @@ export default function ContractDetailPage() {
 
           {activeTab === 'documento' && (
             <div>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-slate-900">Documento do contrato</h3>
-                <div className="flex gap-2">
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg hover:bg-slate-50 text-slate-600" style={{ borderColor: 'var(--color-border)' }}>
-                    <Download size={12} /> Baixar PDF
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                <h3 className="text-sm font-semibold text-slate-900">Documento do contrato — v{contract.currentVersion?.versionNumber ?? 1}</h3>
+                <div className="flex items-center gap-2">
+                  <select value={uploadCategory} onChange={e => setUploadCategory(e.target.value as DocumentCategoryApi)} className="px-2 py-1.5 text-xs border rounded-lg" style={{ borderColor: 'var(--color-border)' }}>
+                    {DOC_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg hover:bg-slate-50 text-slate-600 disabled:opacity-50"
+                    style={{ borderColor: 'var(--color-border)' }}
+                  >
+                    <Upload size={12} /> {uploading ? 'Enviando...' : 'Anexar arquivo'}
                   </button>
+                  <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelected} />
                 </div>
               </div>
-              <div className="rounded-xl border p-8 text-center" style={{ borderColor: 'var(--color-border)', backgroundColor: '#FAFAFA' }}>
-                <FileText size={40} className="mx-auto mb-3 text-slate-300" />
-                <p className="text-sm font-medium text-slate-600">Visualização do PDF</p>
-                <p className="text-xs mt-1 text-slate-400">O documento apareceria aqui em modo de preview</p>
-                <div className="mt-4 rounded-lg border p-6 bg-white text-left max-w-lg mx-auto" style={{ borderColor: 'var(--color-border)', fontFamily: 'var(--font-mono)', fontSize: '11px', lineHeight: '1.9', color: '#374151' }}>
-                  <div className="text-center font-semibold mb-4">CONTRATO DE PRESTAÇÃO DE SERVIÇOS JURÍDICOS</div>
-                  <div>CONTRATANTE: <span className="text-blue-700">João da Silva</span></div>
-                  <div>CPF: <span className="text-blue-700">123.456.789-00</span></div>
-                  <div className="mt-2">VALOR: <span className="text-blue-700">R$ 4.800,00</span></div>
-                  <div>DATA DE INÍCIO: <span className="text-blue-700">01/09/2026</span></div>
-                  <div className="mt-2 text-slate-400">[...restante do contrato...]</div>
-                  <div className="mt-6 pt-4 border-t flex justify-between" style={{ borderColor: '#E2E8F0' }}>
-                    <div className="text-center">
-                      <div className="w-20 border-b border-slate-400 mb-1" />
-                      <div className="text-xs text-slate-400">Contratante</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="w-20 border-b border-slate-400 mb-1" />
-                      <div className="text-xs text-slate-400">Advogado</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
-          {activeTab === 'status' && (
-            <div>
-              <h3 className="text-sm font-semibold text-slate-900 mb-6">Timeline do contrato</h3>
-              <div className="relative pl-8">
-                <div className="absolute left-3 top-0 bottom-0 w-px bg-slate-200" />
-                {timeline.map((item, i) => (
-                  <div key={i} className="relative mb-6">
-                    <div className={`absolute -left-5 w-6 h-6 rounded-full border-2 border-white flex items-center justify-center ${item.done ? 'bg-green-500' : 'bg-slate-200'}`}>
-                      {item.done && <Check size={12} className="text-white" />}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className={`text-sm font-semibold ${item.done ? 'text-slate-900' : 'text-slate-400'}`}>{item.status}</span>
-                      <span className="text-xs tabular-nums" style={{ color: 'var(--color-muted-foreground)', fontFamily: 'var(--font-mono)' }}>{item.date}</span>
-                    </div>
-                  </div>
-                ))}
+              <div className="rounded-xl border p-6" style={{ borderColor: 'var(--color-border)', backgroundColor: '#FAFAFA' }}>
+                {contract.currentVersion ? (
+                  <pre className="whitespace-pre-wrap text-left max-w-2xl mx-auto" style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', lineHeight: '1.8', color: '#374151' }}>
+                    {contract.currentVersion.content}
+                  </pre>
+                ) : (
+                  <p className="text-sm text-center text-slate-400">Nenhuma versão gerada ainda.</p>
+                )}
               </div>
+
+              {contractDocs.length > 0 && (
+                <div className="mt-5">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Arquivos anexados</h4>
+                  <div className="space-y-2">
+                    {contractDocs.map(d => (
+                      <div
+                        key={d.id}
+                        className="flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 cursor-pointer transition-colors"
+                        style={{ borderColor: 'var(--color-border)' }}
+                        onClick={() => documentsService.download(d.id, d.fileName)}
+                      >
+                        <Paperclip size={14} className="text-slate-400 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-slate-800 truncate">{d.fileName}</div>
+                          <div className="text-xs text-slate-400">{(d.sizeBytes / 1024).toFixed(0)} KB · {new Date(d.createdAt).toLocaleDateString('pt-BR')}</div>
+                        </div>
+                        <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full flex-shrink-0">{d.category}</span>
+                        <Download size={13} className="text-slate-400 flex-shrink-0" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {activeTab === 'pagamentos' && (
             <div>
+              <div className="flex justify-end mb-3">
+                <button onClick={() => setShowNewPayment(true)} className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white" style={{ backgroundColor: 'var(--color-primary)' }}>
+                  + Nova parcela
+                </button>
+              </div>
               <div className="grid grid-cols-3 gap-4 mb-5">
                 <div className="text-center p-4 rounded-xl" style={{ backgroundColor: '#F0FDF4' }}>
-                  <div className="text-lg font-bold text-green-700 tabular-nums" style={{ fontFamily: 'var(--font-display)' }}>R$ {totalPaid.toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>
+                  <div className="text-lg font-bold text-green-700 tabular-nums" style={{ fontFamily: 'var(--font-display)' }}>{totalPaid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
                   <div className="text-xs text-green-600 mt-0.5">Pago</div>
                 </div>
                 <div className="text-center p-4 rounded-xl" style={{ backgroundColor: '#FFFBEB' }}>
-                  <div className="text-lg font-bold text-amber-700 tabular-nums" style={{ fontFamily: 'var(--font-display)' }}>R$ {totalPending.toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>
+                  <div className="text-lg font-bold text-amber-700 tabular-nums" style={{ fontFamily: 'var(--font-display)' }}>{totalPending.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
                   <div className="text-xs text-amber-600 mt-0.5">Pendente</div>
                 </div>
                 <div className="text-center p-4 rounded-xl" style={{ backgroundColor: '#EFF6FF' }}>
-                  <div className="text-lg font-bold text-blue-700 tabular-nums" style={{ fontFamily: 'var(--font-display)' }}>R$ {contract.value.toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>
-                  <div className="text-xs text-blue-600 mt-0.5">Total</div>
+                  <div className="text-lg font-bold text-blue-700 tabular-nums" style={{ fontFamily: 'var(--font-display)' }}>{contract.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
+                  <div className="text-xs text-blue-600 mt-0.5">Total do contrato</div>
                 </div>
               </div>
               <div className="space-y-2">
@@ -217,13 +418,22 @@ export default function ContractDetailPage() {
                 ) : contractPayments.map(p => (
                   <div key={p.id} className="flex items-center gap-4 p-3 rounded-lg border" style={{ borderColor: 'var(--color-border)' }}>
                     <div className="flex-1">
-                      <div className="text-sm font-medium text-slate-800">Parcela {p.installment}</div>
-                      <div className="text-xs text-slate-400">Venc. {p.dueDate}{p.method ? ` · ${p.method}` : ''}</div>
+                      <div className="text-sm font-medium text-slate-800">Parcela {p.installmentNumber}/{p.installmentTotal}</div>
+                      <div className="text-xs text-slate-400">Venc. {new Date(p.dueDate).toLocaleDateString('pt-BR')}{p.method ? ` · ${p.method}` : ''}</div>
                     </div>
                     <StatusBadge status={p.status} size="sm" />
                     <div className="text-sm font-semibold tabular-nums" style={{ fontFamily: 'var(--font-mono)' }}>
-                      R$ {p.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      {p.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </div>
+                    {p.status !== 'pago' && p.status !== 'cancelado' && (
+                      <button
+                        onClick={() => { setRegisteringPayment(p); setRegisterMethod('PIX'); }}
+                        className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border hover:bg-slate-50 text-slate-600 flex-shrink-0"
+                        style={{ borderColor: 'var(--color-border)' }}
+                      >
+                        Registrar
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -232,27 +442,147 @@ export default function ContractDetailPage() {
 
           {activeTab === 'historico' && (
             <div className="relative pl-6">
-              <div className="absolute left-2 top-0 bottom-0 w-px bg-slate-200" />
-              {[
-                { date: '21/09/2026', time: '14:32', text: 'Muryllo criou o contrato' },
-                { date: '21/09/2026', time: '14:40', text: 'PDF gerado automaticamente' },
-                { date: '21/09/2026', time: '15:05', text: 'Contrato enviado ao cliente por e-mail' },
-                { date: '20/09/2026', time: '09:12', text: 'João da Silva visualizou o contrato' },
-                { date: '20/09/2026', time: '10:02', text: 'Contrato assinado digitalmente pelo cliente' },
-                { date: '03/09/2026', time: '00:00', text: 'Contrato ativado automaticamente' },
-              ].map((item, i) => (
-                <div key={i} className="relative mb-5">
-                  <div className="absolute -left-4 w-3 h-3 rounded-full border-2 border-white" style={{ backgroundColor: 'var(--color-primary)' }} />
-                  <div className="text-xs mb-0.5 tabular-nums" style={{ color: 'var(--color-muted-foreground)', fontFamily: 'var(--font-mono)' }}>
-                    {item.date} · {item.time}
-                  </div>
-                  <div className="text-sm text-slate-700">{item.text}</div>
+              {history.length === 0 ? (
+                <div className="text-center py-8 text-slate-400">
+                  <Clock size={28} className="mx-auto mb-2" />
+                  <p className="text-sm">Nenhum evento registrado</p>
                 </div>
-              ))}
+              ) : (
+                <>
+                  <div className="absolute left-2 top-0 bottom-0 w-px bg-slate-200" />
+                  {history.map((item) => {
+                    const date = new Date(item.createdAt);
+                    return (
+                      <div key={item.id} className="relative mb-5">
+                        <div className="absolute -left-4 w-3 h-3 rounded-full border-2 border-white" style={{ backgroundColor: 'var(--color-primary)' }} />
+                        <div className="text-xs mb-0.5 tabular-nums" style={{ color: 'var(--color-muted-foreground)', fontFamily: 'var(--font-mono)' }}>
+                          {date.toLocaleDateString('pt-BR')} · {date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                        <div className="text-sm text-slate-700">{item.actorName} {item.action} {item.entityLabel}</div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
             </div>
           )}
         </div>
       </div>
+
+      {/* Edit modal */}
+      {showEdit && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+            <div className="px-6 py-5 border-b" style={{ borderColor: 'var(--color-border)' }}>
+              <h2 className="text-base font-bold text-slate-900" style={{ fontFamily: 'var(--font-display)' }}>Editar contrato</h2>
+              <p className="text-sm mt-0.5" style={{ color: 'var(--color-muted-foreground)' }}>Uma nova versão do documento será gerada.</p>
+            </div>
+            <div className="px-6 py-5 space-y-4 max-h-[65vh] overflow-y-auto">
+              {editError && (
+                <div className="flex items-center gap-2 px-3 py-2.5 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+                  <AlertCircle size={15} className="flex-shrink-0" /> {editError}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Valor (R$) *</label>
+                  <input value={editForm.value} onChange={e => setEditForm(f => ({ ...f, value: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Data de início *</label>
+                  <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Prazo / Duração</label>
+                  <input value={editForm.deadline} onChange={e => setEditForm(f => ({ ...f, deadline: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Objeto *</label>
+                  <textarea rows={2} value={editForm.object} onChange={e => setEditForm(f => ({ ...f, object: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg resize-none" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Condições específicas</label>
+                  <textarea rows={2} value={editForm.conditions} onChange={e => setEditForm(f => ({ ...f, conditions: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg resize-none" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: 'var(--color-border)' }}>
+              <button onClick={() => setShowEdit(false)} className="px-4 py-2 text-sm font-medium border rounded-lg hover:bg-slate-50 text-slate-600" style={{ borderColor: 'var(--color-border)' }}>Cancelar</button>
+              <button onClick={handleEditSave} disabled={editSaving} className="px-4 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 disabled:opacity-60" style={{ backgroundColor: 'var(--color-primary)' }}>
+                {editSaving ? 'Salvando...' : 'Salvar alterações'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New payment modal */}
+      {showNewPayment && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="px-6 py-5 border-b" style={{ borderColor: 'var(--color-border)' }}>
+              <h2 className="text-base font-bold text-slate-900" style={{ fontFamily: 'var(--font-display)' }}>Nova parcela</h2>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              {paymentError && (
+                <div className="flex items-center gap-2 px-3 py-2.5 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+                  <AlertCircle size={15} className="flex-shrink-0" /> {paymentError}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Parcela nº</label>
+                  <input type="number" min={1} value={paymentForm.installmentNumber} onChange={e => setPaymentForm(f => ({ ...f, installmentNumber: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Total de parcelas</label>
+                  <input type="number" min={1} value={paymentForm.installmentTotal} onChange={e => setPaymentForm(f => ({ ...f, installmentTotal: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Valor (R$) *</label>
+                  <input value={paymentForm.value} onChange={e => setPaymentForm(f => ({ ...f, value: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Vencimento *</label>
+                  <input type="date" value={paymentForm.dueDate} onChange={e => setPaymentForm(f => ({ ...f, dueDate: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: 'var(--color-border)' }}>
+              <button onClick={() => setShowNewPayment(false)} className="px-4 py-2 text-sm font-medium border rounded-lg hover:bg-slate-50 text-slate-600" style={{ borderColor: 'var(--color-border)' }}>Cancelar</button>
+              <button onClick={handleCreatePayment} disabled={paymentSaving || !paymentForm.value || !paymentForm.dueDate} className="px-4 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 disabled:opacity-60" style={{ backgroundColor: 'var(--color-primary)' }}>
+                {paymentSaving ? 'Salvando...' : 'Criar parcela'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Register payment modal */}
+      {registeringPayment && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="px-6 py-5 border-b" style={{ borderColor: 'var(--color-border)' }}>
+              <h2 className="text-base font-bold text-slate-900" style={{ fontFamily: 'var(--font-display)' }}>Registrar pagamento</h2>
+              <p className="text-sm mt-0.5" style={{ color: 'var(--color-muted-foreground)' }}>
+                Parcela {registeringPayment.installmentNumber}/{registeringPayment.installmentTotal} — {registeringPayment.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+              </p>
+            </div>
+            <div className="px-6 py-5">
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">Forma de pagamento</label>
+              <select value={registerMethod} onChange={e => setRegisterMethod(e.target.value as PaymentMethodApi)} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }}>
+                {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: 'var(--color-border)' }}>
+              <button onClick={() => setRegisteringPayment(null)} className="px-4 py-2 text-sm font-medium border rounded-lg hover:bg-slate-50 text-slate-600" style={{ borderColor: 'var(--color-border)' }}>Cancelar</button>
+              <button onClick={handleRegisterPayment} disabled={registerSaving} className="px-4 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 disabled:opacity-60" style={{ backgroundColor: '#059669' }}>
+                {registerSaving ? 'Registrando...' : <><Check size={14} className="inline mr-1" />Confirmar</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

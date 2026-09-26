@@ -24,3 +24,4 @@ coverage/
 # prisma
 prisma/dev.db
 /generated/
+uploads/

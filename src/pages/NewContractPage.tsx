@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Check, User, FileText, Info, Eye, Rocket } from 'lucide-react';
-import { clients, templates } from '../data/mock';
+import { ArrowLeft, ArrowRight, Check, User, FileText, Info, Eye, Rocket, Search, AlertCircle } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
+import { clientsService } from '../services/clients';
+import { templatesService } from '../services/templates';
+import { contractsService } from '../services/contracts';
+import type { Contract } from '../types/api';
 
 const steps = [
   { id: 1, label: 'Cliente', icon: User },
@@ -13,10 +18,27 @@ const steps = [
 
 export default function NewContractPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [step, setStep] = useState(1);
-  const [selectedClient, setSelectedClient] = useState<number | null>(null);
-  const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null);
+  const [selectedClient, setSelectedClient] = useState<string | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+  const [clientSearch, setClientSearch] = useState('');
   const [formData, setFormData] = useState({ value: '', object: '', startDate: '', deadline: '', conditions: '' });
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [created, setCreated] = useState<Contract | null>(null);
+
+  const { data: clientsData } = useApiQuery(
+    () => clientsService.list({ pageSize: 50, status: 'ativo', search: clientSearch || undefined }),
+    [clientSearch],
+  );
+  const { data: templatesData } = useApiQuery(
+    () => templatesService.list({ pageSize: 50, status: 'ativo' }),
+    [],
+  );
+
+  const clients = clientsData?.data ?? [];
+  const templates = templatesData?.data ?? [];
 
   const client = clients.find(c => c.id === selectedClient);
   const template = templates.find(t => t.id === selectedTemplate);
@@ -27,6 +49,29 @@ export default function NewContractPage() {
     if (step === 3) return formData.value && formData.object && formData.startDate;
     return true;
   };
+
+  async function handleFinish() {
+    if (!selectedClient || !selectedTemplate) return;
+    setCreateError(null);
+    setCreating(true);
+    try {
+      const response = await contractsService.create({
+        clientId: selectedClient,
+        templateId: selectedTemplate,
+        value: Number(formData.value.replace(/\./g, '').replace(',', '.')) || Number(formData.value),
+        object: formData.object,
+        startDate: formData.startDate,
+        termText: formData.deadline || undefined,
+        conditions: formData.conditions || undefined,
+      });
+      setCreated(response.contract);
+      setStep(5);
+    } catch (err) {
+      setCreateError(toErrorMessage(err, 'Não foi possível criar o contrato.'));
+    } finally {
+      setCreating(false);
+    }
+  }
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
@@ -74,29 +119,45 @@ export default function NewContractPage() {
         {step === 1 && (
           <div>
             <h2 className="text-base font-semibold text-slate-900 mb-1" style={{ fontFamily: 'var(--font-display)' }}>Selecionar cliente</h2>
-            <p className="text-sm mb-5" style={{ color: 'var(--color-muted-foreground)' }}>Escolha o cliente para este contrato</p>
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {clients.map(c => (
-                <label
-                  key={c.id}
-                  className={`flex items-center gap-3 p-3.5 rounded-lg border cursor-pointer transition-all ${
-                    selectedClient === c.id ? 'border-blue-700 bg-blue-50' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                  }`}
-                >
-                  <input type="radio" name="client" className="sr-only" checked={selectedClient === c.id} onChange={() => setSelectedClient(c.id)} />
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ backgroundColor: 'var(--color-primary)' }}>
-                    {c.name.charAt(0)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-slate-900">{c.name}</div>
-                    <div className="text-xs text-slate-400">{c.document} · {c.email}</div>
-                  </div>
-                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${selectedClient === c.id ? 'border-blue-700 bg-blue-700' : 'border-slate-300'}`}>
-                    {selectedClient === c.id && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                  </div>
-                </label>
-              ))}
+            <p className="text-sm mb-3" style={{ color: 'var(--color-muted-foreground)' }}>Escolha o cliente para este contrato</p>
+            <div className="relative mb-4">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={clientSearch}
+                onChange={e => setClientSearch(e.target.value)}
+                placeholder="Buscar cliente..."
+                className="w-full pl-8 pr-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2"
+                style={{ borderColor: 'var(--color-border)' }}
+              />
             </div>
+            {clients.length === 0 ? (
+              <p className="text-sm text-center py-8" style={{ color: 'var(--color-muted-foreground)' }}>
+                Nenhum cliente ativo encontrado. Cadastre um cliente antes de criar o contrato.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {clients.map(c => (
+                  <label
+                    key={c.id}
+                    className={`flex items-center gap-3 p-3.5 rounded-lg border cursor-pointer transition-all ${
+                      selectedClient === c.id ? 'border-blue-700 bg-blue-50' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input type="radio" name="client" className="sr-only" checked={selectedClient === c.id} onChange={() => setSelectedClient(c.id)} />
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ backgroundColor: 'var(--color-primary)' }}>
+                      {c.name.charAt(0)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-slate-900">{c.name}</div>
+                      <div className="text-xs text-slate-400">{c.document} · {c.email}</div>
+                    </div>
+                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${selectedClient === c.id ? 'border-blue-700 bg-blue-700' : 'border-slate-300'}`}>
+                      {selectedClient === c.id && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -104,26 +165,32 @@ export default function NewContractPage() {
           <div>
             <h2 className="text-base font-semibold text-slate-900 mb-1" style={{ fontFamily: 'var(--font-display)' }}>Selecionar modelo</h2>
             <p className="text-sm mb-5" style={{ color: 'var(--color-muted-foreground)' }}>Escolha o modelo base para o contrato</p>
-            <div className="space-y-2">
-              {templates.map(t => (
-                <label
-                  key={t.id}
-                  className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
-                    selectedTemplate === t.id ? 'border-blue-700 bg-blue-50' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                  }`}
-                >
-                  <input type="radio" name="template" className="sr-only" checked={selectedTemplate === t.id} onChange={() => setSelectedTemplate(t.id)} />
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-slate-900">{t.name}</div>
-                    <div className="text-xs text-slate-400 mt-0.5">{t.description}</div>
-                    <div className="text-xs text-slate-400 mt-1">Utilizado {t.uses}x · Atualizado em {t.updatedAt}</div>
-                  </div>
-                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${selectedTemplate === t.id ? 'border-blue-700 bg-blue-700' : 'border-slate-300'}`}>
-                    {selectedTemplate === t.id && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                  </div>
-                </label>
-              ))}
-            </div>
+            {templates.length === 0 ? (
+              <p className="text-sm text-center py-8" style={{ color: 'var(--color-muted-foreground)' }}>
+                Nenhum modelo ativo encontrado. Cadastre um modelo em "Modelos" antes de criar o contrato.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {templates.map(t => (
+                  <label
+                    key={t.id}
+                    className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
+                      selectedTemplate === t.id ? 'border-blue-700 bg-blue-50' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input type="radio" name="template" className="sr-only" checked={selectedTemplate === t.id} onChange={() => setSelectedTemplate(t.id)} />
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-slate-900">{t.name}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">{t.description}</div>
+                      <div className="text-xs text-slate-400 mt-1">Utilizado {t.usageCount}x · Atualizado em {new Date(t.updatedAt).toLocaleDateString('pt-BR')}</div>
+                    </div>
+                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${selectedTemplate === t.id ? 'border-blue-700 bg-blue-700' : 'border-slate-300'}`}>
+                      {selectedTemplate === t.id && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -159,7 +226,7 @@ export default function NewContractPage() {
         {step === 4 && (
           <div>
             <h2 className="text-base font-semibold text-slate-900 mb-1" style={{ fontFamily: 'var(--font-display)' }}>Revisão do contrato</h2>
-            <p className="text-sm mb-5" style={{ color: 'var(--color-muted-foreground)' }}>Verifique as informações antes de finalizar</p>
+            <p className="text-sm mb-5" style={{ color: 'var(--color-muted-foreground)' }}>Verifique as informações antes de finalizar. O texto completo, gerado a partir do modelo, ficará disponível na página do contrato.</p>
             <div className="rounded-xl border p-6" style={{ borderColor: 'var(--color-border)', backgroundColor: '#FAFAFA', fontFamily: 'var(--font-mono)', fontSize: '12px', lineHeight: '1.8', color: '#374151' }}>
               <div className="text-center font-semibold text-sm mb-6 text-slate-900">CONTRATO DE {template?.name?.toUpperCase() ?? 'PRESTAÇÃO DE SERVIÇOS JURÍDICOS'}</div>
               <div className="space-y-2">
@@ -167,26 +234,31 @@ export default function NewContractPage() {
                 <div><span className="text-slate-400">CPF/CNPJ:</span> <span className="text-blue-700 font-medium">{client?.document ?? '{{cliente.cpf}}'}</span></div>
                 <div className="mt-2"><span className="text-slate-400">OBJETO:</span> <span className="text-blue-700 font-medium">{formData.object || '{{contrato.objeto}}'}</span></div>
                 <div><span className="text-slate-400">VALOR:</span> <span className="text-blue-700 font-medium">{formData.value ? `R$ ${formData.value}` : '{{contrato.valor}}'}</span></div>
-                <div><span className="text-slate-400">INÍCIO:</span> <span className="text-blue-700 font-medium">{formData.startDate || '{{contrato.data_inicio}}'}</span></div>
+                <div><span className="text-slate-400">INÍCIO:</span> <span className="text-blue-700 font-medium">{formData.startDate ? new Date(formData.startDate + 'T00:00:00').toLocaleDateString('pt-BR') : '{{contrato.data_inicio}}'}</span></div>
                 <div><span className="text-slate-400">PRAZO:</span> <span className="text-blue-700 font-medium">{formData.deadline || '{{contrato.prazo}}'}</span></div>
                 <div className="mt-4 text-slate-400">ADVOGADO RESPONSÁVEL:</div>
-                <div><span className="text-slate-400">NOME:</span> <span className="text-blue-700 font-medium">Muryllo Rocha</span></div>
-                <div><span className="text-slate-400">OAB:</span> <span className="text-blue-700 font-medium">OAB/SP 123.456</span></div>
+                <div><span className="text-slate-400">NOME:</span> <span className="text-blue-700 font-medium">{user?.name}</span></div>
+                <div><span className="text-slate-400">OAB:</span> <span className="text-blue-700 font-medium">{user?.oabNumber ?? '—'}</span></div>
               </div>
             </div>
             <div className="mt-3 p-3 rounded-lg text-xs text-blue-700 flex items-start gap-2" style={{ backgroundColor: '#EFF6FF' }}>
               <Info size={13} className="flex-shrink-0 mt-0.5" />
               <span>Os campos em azul foram preenchidos automaticamente com os dados informados. Revise antes de prosseguir.</span>
             </div>
+            {createError && (
+              <div className="mt-3 flex items-center gap-2 px-3 py-2.5 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+                <AlertCircle size={15} className="flex-shrink-0" /> {createError}
+              </div>
+            )}
           </div>
         )}
 
-        {step === 5 && (
+        {step === 5 && created && (
           <div className="text-center py-8">
             <div className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ backgroundColor: '#F0FDF4' }}>
               <Check size={28} className="text-green-600" />
             </div>
-            <h2 className="text-xl font-bold text-slate-900 mb-2" style={{ fontFamily: 'var(--font-display)' }}>Contrato criado com sucesso!</h2>
+            <h2 className="text-xl font-bold text-slate-900 mb-2" style={{ fontFamily: 'var(--font-display)' }}>Contrato #{created.number} criado com sucesso!</h2>
             <p className="text-sm mb-8" style={{ color: 'var(--color-muted-foreground)' }}>
               O contrato foi gerado como <strong>Rascunho</strong>. Escolha como deseja prosseguir.
             </p>
@@ -196,21 +268,14 @@ export default function NewContractPage() {
                 className="px-5 py-2.5 text-sm font-medium border rounded-lg hover:bg-slate-50 text-slate-700 transition-colors"
                 style={{ borderColor: 'var(--color-border)' }}
               >
-                Salvar como rascunho
+                Voltar para contratos
               </button>
               <button
-                onClick={() => navigate('/contratos/102')}
+                onClick={() => navigate(`/contratos/${created.id}`)}
                 className="px-5 py-2.5 text-sm font-semibold text-white rounded-lg hover:opacity-90"
                 style={{ backgroundColor: 'var(--color-primary)' }}
               >
-                Gerar contrato
-              </button>
-              <button
-                onClick={() => navigate('/contratos/102')}
-                className="px-5 py-2.5 text-sm font-semibold text-white rounded-lg hover:opacity-90"
-                style={{ backgroundColor: '#059669' }}
-              >
-                Gerar PDF
+                Ver contrato
               </button>
             </div>
           </div>
@@ -228,12 +293,12 @@ export default function NewContractPage() {
             <ArrowLeft size={15} /> {step === 1 ? 'Cancelar' : 'Voltar'}
           </button>
           <button
-            onClick={() => setStep(step + 1)}
-            disabled={!canProceed()}
+            onClick={() => step === 4 ? handleFinish() : setStep(step + 1)}
+            disabled={!canProceed() || creating}
             className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ backgroundColor: 'var(--color-primary)' }}
           >
-            {step === 4 ? 'Finalizar' : 'Continuar'} <ArrowRight size={15} />
+            {creating ? 'Criando...' : step === 4 ? 'Finalizar' : 'Continuar'} <ArrowRight size={15} />
           </button>
         </div>
       )}

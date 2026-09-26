@@ -1,4 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider } from './contexts/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
 import AppLayout from './layouts/AppLayout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
@@ -17,25 +19,29 @@ import SettingsPage from './pages/SettingsPage';
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={<AppLayout />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="clientes" element={<ClientsPage />} />
-          <Route path="clientes/:id" element={<ClientDetailPage />} />
-          <Route path="contratos" element={<ContractsPage />} />
-          <Route path="contratos/novo" element={<NewContractPage />} />
-          <Route path="contratos/:id" element={<ContractDetailPage />} />
-          <Route path="modelos" element={<TemplatesPage />} />
-          <Route path="documentos" element={<DocumentsPage />} />
-          <Route path="pagamentos" element={<PaymentsPage />} />
-          <Route path="notificacoes" element={<NotificationsPage />} />
-          <Route path="historico" element={<HistoryPage />} />
-          <Route path="configuracoes" element={<SettingsPage />} />
-        </Route>
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route element={<ProtectedRoute />}>
+            <Route path="/" element={<AppLayout />}>
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="clientes" element={<ClientsPage />} />
+              <Route path="clientes/:id" element={<ClientDetailPage />} />
+              <Route path="contratos" element={<ContractsPage />} />
+              <Route path="contratos/novo" element={<NewContractPage />} />
+              <Route path="contratos/:id" element={<ContractDetailPage />} />
+              <Route path="modelos" element={<TemplatesPage />} />
+              <Route path="documentos" element={<DocumentsPage />} />
+              <Route path="pagamentos" element={<PaymentsPage />} />
+              <Route path="notificacoes" element={<NotificationsPage />} />
+              <Route path="historico" element={<HistoryPage />} />
+              <Route path="configuracoes" element={<SettingsPage />} />
+            </Route>
+          </Route>
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </AuthProvider>
     </BrowserRouter>
   );
 }

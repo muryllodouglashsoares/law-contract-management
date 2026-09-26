@@ -1,8 +1,13 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Mail, Phone, MapPin, Building2, FileText, FolderOpen, CreditCard, Clock, Plus } from 'lucide-react';
-import { clients, contracts, payments, documents } from '../data/mock';
+import { ArrowLeft, Mail, Phone, Building2, FileText, FolderOpen, CreditCard, Clock, Plus, AlertCircle } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
+import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
+import { clientsService } from '../services/clients';
+import { contractsService } from '../services/contracts';
+import { documentsService } from '../services/documents';
+import { paymentsService } from '../services/payments';
+import { auditService } from '../services/audit';
 
 const tabs = [
   { key: 'info', label: 'Informações', icon: Building2 },
@@ -13,14 +18,58 @@ const tabs = [
 ];
 
 export default function ClientDetailPage() {
-  const { id } = useParams();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [tab, setTab] = useState('info');
 
-  const client = clients.find(c => c.id === Number(id)) ?? clients[0];
-  const clientContracts = contracts.filter(c => c.clientId === client.id);
-  const clientPayments = payments.filter(p => p.client === client.name);
-  const clientDocs = documents.filter(d => d.client === client.name);
+  const { data: clientData, loading: loadingClient, error: clientError } = useApiQuery(
+    () => clientsService.getById(id!),
+    [id],
+  );
+  const client = clientData?.client;
+
+  const { data: contractsData } = useApiQuery(
+    () => contractsService.list({ clientId: id, pageSize: 50 }),
+    [id],
+  );
+  const { data: documentsData } = useApiQuery(
+    () => documentsService.list({ clientId: id, pageSize: 50 }),
+    [id],
+  );
+  const { data: paymentsData } = useApiQuery(
+    () => paymentsService.list({ clientId: id, pageSize: 50 }),
+    [id],
+  );
+  const { data: auditData } = useApiQuery(
+    () => auditService.list({ entityType: 'Client', entityId: id, pageSize: 20 }),
+    [id],
+  );
+
+  const clientContracts = contractsData?.data ?? [];
+  const clientDocs = documentsData?.data ?? [];
+  const clientPayments = paymentsData?.data ?? [];
+  const clientHistory = auditData?.data ?? [];
+
+  if (loadingClient) {
+    return (
+      <div className="p-6 max-w-5xl mx-auto flex items-center justify-center py-24">
+        <div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: 'var(--color-primary)', borderTopColor: 'transparent' }} />
+      </div>
+    );
+  }
+
+  if (clientError || !client) {
+    return (
+      <div className="p-6 max-w-5xl mx-auto">
+        <button onClick={() => navigate('/clientes')} className="flex items-center gap-2 text-sm mb-4" style={{ color: 'var(--color-muted-foreground)' }}>
+          <ArrowLeft size={14} /> Clientes
+        </button>
+        <div className="flex items-center gap-2 px-4 py-3 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+          <AlertCircle size={15} /> {toErrorMessage(clientError, 'Cliente não encontrado.')}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -57,7 +106,7 @@ export default function ClientDetailPage() {
           </div>
           <div className="flex items-center gap-4 mt-3 flex-wrap text-sm text-slate-600">
             <span className="flex items-center gap-1.5"><Mail size={13} />{client.email}</span>
-            <span className="flex items-center gap-1.5"><Phone size={13} />{client.phone}</span>
+            {client.phone && <span className="flex items-center gap-1.5"><Phone size={13} />{client.phone}</span>}
           </div>
         </div>
       </div>
@@ -65,7 +114,7 @@ export default function ClientDetailPage() {
       {/* Stats row */}
       <div className="grid grid-cols-3 gap-4 mb-5">
         {[
-          { label: 'Contratos', value: client.contracts, color: 'var(--color-primary)', bg: '#EFF6FF' },
+          { label: 'Contratos', value: client.contractsCount, color: 'var(--color-primary)', bg: '#EFF6FF' },
           { label: 'Documentos', value: clientDocs.length, color: '#D97706', bg: '#FFFBEB' },
           { label: 'Pagamentos', value: clientPayments.length, color: '#059669', bg: '#F0FDF4' },
         ].map(stat => (
@@ -103,8 +152,9 @@ export default function ClientDetailPage() {
                     { label: 'Nome', value: client.name },
                     { label: 'CPF / CNPJ', value: client.document },
                     { label: 'E-mail', value: client.email },
-                    { label: 'Telefone', value: client.phone },
-                    { label: 'Última atividade', value: client.lastActivity },
+                    { label: 'Telefone', value: client.phone ?? '—' },
+                    { label: 'Endereço', value: client.address ?? '—' },
+                    { label: 'Última atividade', value: new Date(client.lastActivity).toLocaleDateString('pt-BR') },
                   ].map(f => (
                     <div key={f.label}>
                       <div className="text-xs text-slate-400 mb-0.5">{f.label}</div>
@@ -116,7 +166,7 @@ export default function ClientDetailPage() {
               <div>
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Observações</h3>
                 <div className="p-3 rounded-lg text-sm text-slate-500 italic" style={{ backgroundColor: '#FAFAFA', border: '1px solid var(--color-border)' }}>
-                  Nenhuma observação registrada.
+                  {client.notes || 'Nenhuma observação registrada.'}
                 </div>
               </div>
             </div>
@@ -136,14 +186,14 @@ export default function ClientDetailPage() {
                   style={{ borderColor: 'var(--color-border)' }}
                   onClick={() => navigate(`/contratos/${c.id}`)}
                 >
-                  <div className="text-xs font-mono font-semibold px-2 py-1 rounded bg-slate-100 text-slate-600">#{c.id}</div>
+                  <div className="text-xs font-mono font-semibold px-2 py-1 rounded bg-slate-100 text-slate-600">#{c.number}</div>
                   <div className="flex-1">
-                    <div className="text-sm font-medium text-slate-800">{c.template}</div>
-                    <div className="text-xs text-slate-400">{c.createdAt}</div>
+                    <div className="text-sm font-medium text-slate-800">{c.template.name}</div>
+                    <div className="text-xs text-slate-400">{new Date(c.createdAt).toLocaleDateString('pt-BR')}</div>
                   </div>
                   <StatusBadge status={c.status} size="sm" />
                   <div className="text-sm font-semibold tabular-nums" style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-foreground)' }}>
-                    R$ {c.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    {c.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </div>
                 </div>
               ))}
@@ -158,13 +208,20 @@ export default function ClientDetailPage() {
                   <p className="text-sm">Nenhum documento</p>
                 </div>
               ) : clientDocs.map(d => (
-                <div key={d.id} className="flex items-center gap-3 p-3 rounded-lg border" style={{ borderColor: 'var(--color-border)' }}>
+                <div
+                  key={d.id}
+                  className="flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 cursor-pointer transition-colors"
+                  style={{ borderColor: 'var(--color-border)' }}
+                  onClick={() => documentsService.download(d.id, d.fileName)}
+                >
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold" style={{ backgroundColor: '#EFF6FF', color: 'var(--color-primary)' }}>
-                    {d.type}
+                    {d.fileType}
                   </div>
                   <div className="flex-1">
-                    <div className="text-sm font-medium text-slate-800">{d.name}</div>
-                    <div className="text-xs text-slate-400">{d.size} · {d.date}</div>
+                    <div className="text-sm font-medium text-slate-800">{d.fileName}</div>
+                    <div className="text-xs text-slate-400">
+                      {(d.sizeBytes / 1024).toFixed(0)} KB · {new Date(d.createdAt).toLocaleDateString('pt-BR')}
+                    </div>
                   </div>
                   <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">{d.category}</span>
                 </div>
@@ -182,12 +239,12 @@ export default function ClientDetailPage() {
               ) : clientPayments.map(p => (
                 <div key={p.id} className="flex items-center gap-4 p-3 rounded-lg border" style={{ borderColor: 'var(--color-border)' }}>
                   <div className="flex-1">
-                    <div className="text-sm font-medium text-slate-800">Contrato #{p.contractId} · Parcela {p.installment}</div>
-                    <div className="text-xs text-slate-400">Venc. {p.dueDate}</div>
+                    <div className="text-sm font-medium text-slate-800">Contrato #{p.contract.number} · Parcela {p.installmentNumber}/{p.installmentTotal}</div>
+                    <div className="text-xs text-slate-400">Venc. {new Date(p.dueDate).toLocaleDateString('pt-BR')}</div>
                   </div>
                   <StatusBadge status={p.status} size="sm" />
                   <div className="text-sm font-semibold tabular-nums" style={{ fontFamily: 'var(--font-mono)' }}>
-                    R$ {p.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    {p.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </div>
                 </div>
               ))}
@@ -196,19 +253,28 @@ export default function ClientDetailPage() {
 
           {tab === 'historico' && (
             <div className="relative pl-6">
-              <div className="absolute left-2 top-0 bottom-0 w-px bg-slate-200" />
-              {[
-                { date: '21/09/2026', time: '14:32', text: 'Contrato #102 criado para este cliente' },
-                { date: '19/09/2026', time: '10:00', text: 'Cliente cadastrado no sistema' },
-              ].map((item, i) => (
-                <div key={i} className="relative mb-5">
-                  <div className="absolute -left-4 w-3 h-3 rounded-full border-2 border-white" style={{ backgroundColor: 'var(--color-primary)' }} />
-                  <div className="text-xs mb-0.5 tabular-nums" style={{ color: 'var(--color-muted-foreground)', fontFamily: 'var(--font-mono)' }}>
-                    {item.date} · {item.time}
-                  </div>
-                  <div className="text-sm text-slate-700">{item.text}</div>
+              {clientHistory.length === 0 ? (
+                <div className="text-center py-8 text-slate-400">
+                  <Clock size={28} className="mx-auto mb-2" />
+                  <p className="text-sm">Nenhum evento registrado para este cliente</p>
                 </div>
-              ))}
+              ) : (
+                <>
+                  <div className="absolute left-2 top-0 bottom-0 w-px bg-slate-200" />
+                  {clientHistory.map((item) => {
+                    const date = new Date(item.createdAt);
+                    return (
+                      <div key={item.id} className="relative mb-5">
+                        <div className="absolute -left-4 w-3 h-3 rounded-full border-2 border-white" style={{ backgroundColor: 'var(--color-primary)' }} />
+                        <div className="text-xs mb-0.5 tabular-nums" style={{ color: 'var(--color-muted-foreground)', fontFamily: 'var(--font-mono)' }}>
+                          {date.toLocaleDateString('pt-BR')} · {date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                        <div className="text-sm text-slate-700">{item.actorName} {item.action} {item.entityLabel}</div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
             </div>
           )}
         </div>
