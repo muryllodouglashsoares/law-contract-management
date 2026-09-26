@@ -46,9 +46,9 @@ export function buildApp(): FastifyInstance {
   });
 
   app.register(cors, {
-    origin: env.CORS_ORIGIN,
-    credentials: true,
-  });
+  origin: env.CORS_ORIGIN, // agora é string[]
+  credentials: true,
+});
 
   app.register(jwt, {
     secret: env.JWT_SECRET,
