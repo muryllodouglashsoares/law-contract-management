@@ -22,7 +22,10 @@ const envSchema = z.object({
 
   JWT_EXPIRES_IN: z.string().default('1d'),
 
-  CORS_ORIGIN: z.string().default('http://localhost:5173'),
+  CORS_ORIGIN: z
+  .string()
+  .default('http://localhost:5173')
+  .transform((val) => val.split(',').map((o) => o.trim()).filter(Boolean)),
 
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
