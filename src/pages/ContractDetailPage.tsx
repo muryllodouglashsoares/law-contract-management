@@ -23,6 +23,22 @@ const STATUS_OPTIONS: { value: ContractStatusApi; label: string }[] = [
   { value: 'cancelado', label: 'Cancelado' },
 ];
 
+// Espelha backend/src/shared/domain/status-map.ts (CONTRACT_STATUS_TRANSITIONS_MAP).
+// Mantido em sincronia manual com o backend — se a máquina de estados mudar
+// lá, precisa mudar aqui também. O backend continua sendo a fonte da
+// verdade e revalida tudo; isto aqui só evita oferecer opções que o
+// backend vai rejeitar com 409.
+const STATUS_TRANSITIONS: Record<ContractStatusApi, ContractStatusApi[]> = {
+  rascunho: ['pronto_envio', 'enviado', 'cancelado'],
+  pronto_envio: ['enviado', 'cancelado'],
+  enviado: ['em_revisao', 'assinado', 'cancelado'],
+  em_revisao: ['enviado', 'assinado', 'cancelado'],
+  assinado: ['ativo', 'cancelado'],
+  ativo: ['encerrado'],
+  encerrado: [],
+  cancelado: [],
+};
+
 const PAYMENT_METHODS: PaymentMethodApi[] = ['PIX', 'Transferência', 'Boleto', 'Dinheiro', 'Cartão'];
 const DOC_CATEGORIES: DocumentCategoryApi[] = ['contrato', 'procuração', 'documento', 'outro'];
 
@@ -49,6 +65,10 @@ export default function ContractDetailPage() {
     () => documentsService.list({ contractId: id, pageSize: 50 }),
     [id],
   );
+
+  const availableStatusOptions = contract
+    ? STATUS_OPTIONS.filter(o => STATUS_TRANSITIONS[contract.status].includes(o.value))
+    : [];
 
   const contractPayments = paymentsData?.data ?? [];
   const totalPaid = contractPayments.filter(p => p.status === 'pago').reduce((s, p) => s + p.value, 0);
@@ -224,13 +244,15 @@ export default function ContractDetailPage() {
             <select
               value={statusDraft || contract.status}
               onChange={e => setStatusDraft(e.target.value as ContractStatusApi)}
-              className="px-3 py-2 text-sm border rounded-lg bg-white text-slate-600"
+              disabled={availableStatusOptions.length === 0}
+              className="px-3 py-2 text-sm border rounded-lg bg-white text-slate-600 disabled:opacity-50"
               style={{ borderColor: 'var(--color-border)' }}
             >
-              {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              <option value={contract.status}>{STATUS_OPTIONS.find(s => s.value === contract.status)?.label}</option>
+              {availableStatusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
             <button
-              disabled={!statusDraft || statusDraft === contract.status || statusUpdating}
+              disabled={!statusDraft || statusDraft === contract.status || statusUpdating || availableStatusOptions.length === 0}
               onClick={() => statusDraft && applyStatus(statusDraft)}
               className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 disabled:opacity-40"
               style={{ backgroundColor: 'var(--color-primary)' }}
