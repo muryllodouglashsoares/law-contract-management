@@ -34,4 +34,4 @@ COPY package.json ./
 
 EXPOSE 3333
 
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/src/server.js"]
