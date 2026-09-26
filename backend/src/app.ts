@@ -45,11 +45,11 @@ export function buildApp(): FastifyInstance {
     },
   });
 
-  app.register(cors, {
-  origin: env.CORS_ORIGIN, // agora é string[]
+app.register(cors, {
+  origin: env.CORS_ORIGIN,
   credentials: true,
+  methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
 });
-
   app.register(jwt, {
     secret: env.JWT_SECRET,
     sign: { expiresIn: env.JWT_EXPIRES_IN },
