@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b1730"/>
+      <stop offset="1" stop-color="#0a1229"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="34" y1="6" x2="52" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4f8cff"/>
+      <stop offset="1" stop-color="#1d4fd8"/>
+    </linearGradient>
+    <linearGradient id="line" x1="16" y1="0" x2="40" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="scale" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#eef4ff"/>
+      <stop offset="1" stop-color="#c9d9f7"/>
+    </linearGradient>
+    <linearGradient id="pan" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg)"/>
+
+  <path d="M18 12 H34 L44 22 V50 A3 3 0 0 1 41 53 H18 A3 3 0 0 1 15 50 V15 A3 3 0 0 1 18 12 Z" fill="#f3f6fc"/>
+  <path d="M34 12 L44 22 H37 A3 3 0 0 1 34 19 Z" fill="url(#fold)"/>
+
+  <rect x="20" y="24" width="14" height="3.2" rx="1.6" fill="url(#line)"/>
+  <rect x="20" y="30.5" width="14" height="3.2" rx="1.6" fill="url(#line)"/>
+  <rect x="20" y="37" width="9" height="3.2" rx="1.6" fill="url(#line)"/>
+
+  <g>
+    <rect x="37.3" y="30" width="2.4" height="21" rx="1.2" fill="url(#scale)"/>
+    <rect x="30" y="49" width="17" height="3.4" rx="1.7" fill="url(#scale)"/>
+    <path d="M38.5 26.5 L41.6 29.6 L38.5 32.7 L35.4 29.6 Z" fill="url(#scale)"/>
+    <line x1="38.5" y1="30.5" x2="30" y2="36" stroke="url(#scale)" stroke-width="1.8" stroke-linecap="round"/>
+    <line x1="38.5" y1="30.5" x2="47" y2="36" stroke="url(#scale)" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M26 36 L34 36 L30 42 Z" fill="url(#pan)"/>
+    <path d="M43 36 L51 36 L47 42 Z" fill="url(#pan)"/>
+  </g>
+</svg>
