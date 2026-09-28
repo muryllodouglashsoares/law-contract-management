@@ -87,6 +87,10 @@ jobs:
         run: npm run db:migrate:deploy
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/lexcontract_test?schema=public
+          # schema.prisma declara directUrl = env("DIRECT_URL"); o Prisma CLI
+          # exige a variável mesmo sem pooler. No CI (Postgres local) ela é
+          # idêntica à DATABASE_URL.
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/lexcontract_test?schema=public
 
       - name: Run tests
         run: npm test
