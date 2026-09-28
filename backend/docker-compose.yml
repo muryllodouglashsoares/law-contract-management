@@ -30,6 +30,7 @@ services:
       NODE_ENV: development
       PORT: 3333
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/lexcontract?schema=public
+      DIRECT_URL: postgresql://postgres:postgres@postgres:5432/lexcontract?schema=public
       JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no seu .env antes de subir o compose}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
