@@ -1,0 +1,23 @@
+node_modules
+dist
+build
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.log
+logs/
+.cache/
+.vite/
+coverage
+*.tsbuildinfo
+
+# Backend tem seu próprio contexto/Dockerfile — não é necessário no build do frontend.
+backend
+
+# Arquivos do ambiente Figma Make / editor, irrelevantes para a imagem de produção.
+.figma
+.mise.toml
+AGENTS.md
+CLAUDE.md

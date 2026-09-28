@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { authenticate } from '../../shared/auth/authenticate';
+import { requireRole } from '../../shared/auth/require-role';
 import { validate } from '../../shared/http/validate';
 import { contractTemplateController } from './contract-template.controller';
 import {
@@ -27,9 +28,19 @@ export async function contractTemplateRoutes(app: FastifyInstance): Promise<void
     contractTemplateController.getById,
   );
 
+  // Criar, editar e remover modelos de contrato é um ato jurídico (o texto
+  // legal do modelo é reutilizado em todos os contratos gerados a partir
+  // dele) — restrito a ADMIN/LAWYER. ASSISTANT mantém leitura (list/getById)
+  // acima, necessária para apoiar a montagem de contratos.
   app.post<{ Body: CreateContractTemplateBody }>(
     '/',
-    { preHandler: [authenticate, validate({ body: createContractTemplateBodySchema })] },
+    {
+      preHandler: [
+        authenticate,
+        requireRole('ADMIN', 'LAWYER'),
+        validate({ body: createContractTemplateBodySchema }),
+      ],
+    },
     contractTemplateController.create,
   );
 
@@ -38,6 +49,7 @@ export async function contractTemplateRoutes(app: FastifyInstance): Promise<void
     {
       preHandler: [
         authenticate,
+        requireRole('ADMIN', 'LAWYER'),
         validate({ params: contractTemplateIdParamsSchema, body: updateContractTemplateBodySchema }),
       ],
     },
@@ -46,7 +58,13 @@ export async function contractTemplateRoutes(app: FastifyInstance): Promise<void
 
   app.delete<{ Params: ContractTemplateIdParams }>(
     '/:id',
-    { preHandler: [authenticate, validate({ params: contractTemplateIdParamsSchema })] },
+    {
+      preHandler: [
+        authenticate,
+        requireRole('ADMIN', 'LAWYER'),
+        validate({ params: contractTemplateIdParamsSchema }),
+      ],
+    },
     contractTemplateController.remove,
   );
 }
