@@ -10,6 +10,11 @@ export interface ListDocumentsParams extends QueryParams {
   clientId?: string;
 }
 
+/** Baixa o arquivo autenticado como Blob (usado por download e visualização). */
+function fetchFile(id: string) {
+  return apiClient.downloadBlob(`/documents/${id}/download`);
+}
+
 export const documentsService = {
   list: (params: ListDocumentsParams = {}) => apiClient.get<Paginated<AppDocument>>('/documents', params),
   getById: (id: string) => apiClient.get<{ document: AppDocument }>(`/documents/${id}`),
@@ -21,8 +26,13 @@ export const documentsService = {
     return apiClient.upload<{ document: AppDocument }>('/documents', formData);
   },
   remove: (id: string) => apiClient.delete<void>(`/documents/${id}`),
+  /** Blob autenticado do arquivo, para pré-visualização local via URL.createObjectURL. */
+  async preview(id: string): Promise<Blob> {
+    const { blob } = await fetchFile(id);
+    return blob;
+  },
   async download(id: string, suggestedFileName: string): Promise<void> {
-    const { blob, fileName } = await apiClient.downloadBlob(`/documents/${id}/download`);
+    const { blob, fileName } = await fetchFile(id);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;

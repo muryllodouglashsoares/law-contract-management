@@ -7,11 +7,13 @@ import { contractController } from './contract.controller';
 import {
   contractIdParamsSchema,
   createContractBodySchema,
+  generateContractPdfBodySchema,
   listContractsQuerySchema,
   updateContractBodySchema,
   updateContractStatusBodySchema,
   type ContractIdParams,
   type CreateContractBody,
+  type GenerateContractPdfBody,
   type ListContractsQuery,
   type UpdateContractBody,
   type UpdateContractStatusBody,
@@ -34,6 +36,20 @@ export async function contractRoutes(app: FastifyInstance): Promise<void> {
     '/:id/versions',
     { preHandler: [authenticate, validate({ params: contractIdParamsSchema })] },
     contractController.listVersions,
+  );
+
+  // Gerar o PDF não altera o contrato (só materializa uma versão já existente),
+  // então segue a mesma regra do upload de documentos: qualquer usuário
+  // autenticado do escritório. O isolamento por officeId é feito no service.
+  app.post<{ Params: ContractIdParams; Body: GenerateContractPdfBody }>(
+    '/:id/pdf',
+    {
+      preHandler: [
+        authenticate,
+        validate({ params: contractIdParamsSchema, body: generateContractPdfBodySchema }),
+      ],
+    },
+    contractController.generatePdf,
   );
 
   // Criar, editar e mudar o status de um contrato (enviar, assinar, ativar,

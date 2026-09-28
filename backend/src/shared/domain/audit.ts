@@ -28,6 +28,7 @@ export const AUDIT_ACTIONS = {
   PAYMENT_UPDATED: 'atualizou o pagamento de',
   DOCUMENT_UPLOADED: 'enviou o documento',
   DOCUMENT_DELETED: 'removeu o documento',
+  CONTRACT_PDF_GENERATED: 'gerou o PDF do',
 } as const;
 
 /**

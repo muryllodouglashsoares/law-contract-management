@@ -1,5 +1,5 @@
 import { apiClient, type Paginated, type QueryParams } from '../lib/api-client';
-import type { Contract, ContractStatusApi, ContractVersion } from '../types/api';
+import type { AppDocument, Contract, ContractStatusApi, ContractVersion } from '../types/api';
 
 export interface ListContractsParams extends QueryParams {
   page?: number;
@@ -28,4 +28,11 @@ export const contractsService = {
     apiClient.patch<{ contract: Contract }>(`/contracts/${id}`, input),
   updateStatus: (id: string, status: ContractStatusApi) =>
     apiClient.patch<{ contract: Contract }>(`/contracts/${id}/status`, { status }),
+  /** Gera (ou reaproveita) o PDF de uma versão do contrato. Sem `versionNumber`,
+   * usa a versão atual. O conteúdo do PDF vem sempre do backend. */
+  generatePdf: (id: string, versionNumber?: number) =>
+    apiClient.post<{ document: AppDocument; created: boolean }>(
+      `/contracts/${id}/pdf`,
+      versionNumber !== undefined ? { versionNumber } : undefined,
+    ),
 };

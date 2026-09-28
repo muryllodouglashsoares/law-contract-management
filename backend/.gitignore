@@ -25,3 +25,6 @@ coverage/
 prisma/dev.db
 /generated/
 uploads/
+
+# Arquivos gerados pelos testes de integração
+uploads-test/

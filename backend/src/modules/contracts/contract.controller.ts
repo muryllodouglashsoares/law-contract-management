@@ -2,9 +2,12 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { prisma } from '../../shared/database/prisma';
 import { toPublicContract } from '../../shared/utils/serialize-contract';
+import { toPublicDocument } from '../../shared/utils/serialize-document';
+import { DocumentService } from '../documents/document.service';
 import type {
   ContractIdParams,
   CreateContractBody,
+  GenerateContractPdfBody,
   ListContractsQuery,
   UpdateContractBody,
   UpdateContractStatusBody,
@@ -12,6 +15,7 @@ import type {
 import { ContractService } from './contract.service';
 
 const contractService = new ContractService(prisma);
+const documentService = new DocumentService(prisma);
 
 export const contractController = {
   async list(request: FastifyRequest<{ Querystring: ListContractsQuery }>, reply: FastifyReply) {
@@ -37,6 +41,20 @@ export const contractController = {
         createdAt: v.createdAt.toISOString(),
       })),
     });
+  },
+
+  async generatePdf(
+    request: FastifyRequest<{ Params: ContractIdParams; Body: GenerateContractPdfBody }>,
+    reply: FastifyReply,
+  ) {
+    const { documentId, created } = await contractService.generatePdf(
+      { userId: request.user.userId, officeId: request.user.officeId },
+      request.params.id,
+      { versionNumber: request.body?.versionNumber },
+    );
+    const document = await documentService.getById(request.user.officeId, documentId);
+    // 201 = PDF novo; 200 = a versão já tinha PDF e ele foi reutilizado.
+    return reply.status(created ? 201 : 200).send({ document: toPublicDocument(document), created });
   },
 
   async create(request: FastifyRequest<{ Body: CreateContractBody }>, reply: FastifyReply) {

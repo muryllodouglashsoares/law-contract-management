@@ -210,6 +210,7 @@ model ContractVersion {
 
   contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
   author   User     @relation(fields: [authorId], references: [id])
+  document Document?
 
   @@unique([contractId, versionNumber])
   @@index([contractId])
@@ -236,6 +237,10 @@ model Document {
   officeId     String
   contractId   String
   uploadedById String
+  /// Preenchido apenas em PDFs gerados pelo sistema a partir de uma
+  /// ContractVersion. @unique => no máximo um PDF por versão (imutável);
+  /// uploads manuais e documentos antigos ficam com null.
+  contractVersionId String? @unique
   fileName     String
   fileType     String
   mimeType     String
@@ -247,6 +252,7 @@ model Document {
   office     Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)
   contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
   uploadedBy User     @relation(fields: [uploadedById], references: [id])
+  contractVersion ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
 
   @@index([officeId])
   @@index([contractId])

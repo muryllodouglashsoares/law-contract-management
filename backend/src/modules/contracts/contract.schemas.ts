@@ -53,3 +53,9 @@ export type ListContractsQuery = z.infer<typeof listContractsQuerySchema>;
 
 export const contractIdParamsSchema = z.object({ id: z.string().uuid('ID de contrato inválido') });
 export type ContractIdParams = z.infer<typeof contractIdParamsSchema>;
+
+/** Body opcional: sem `versionNumber`, gera o PDF da versão atual. */
+export const generateContractPdfBodySchema = z
+  .object({ versionNumber: z.number().int().positive('Versão inválida').optional() })
+  .optional();
+export type GenerateContractPdfBody = z.infer<typeof generateContractPdfBodySchema>;

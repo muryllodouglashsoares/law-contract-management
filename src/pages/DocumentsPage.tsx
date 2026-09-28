@@ -213,7 +213,7 @@ export default function DocumentsPage() {
                         </div>
                         <div>
                           <div className="text-sm font-medium text-slate-900">{d.fileName}</div>
-                          <div className="text-xs text-slate-400 capitalize">{d.category}</div>
+                          <div className="text-xs text-slate-400 capitalize">{d.category}{d.versionNumber ? ` · versão ${d.versionNumber}` : ''}</div>
                         </div>
                       </div>
                     </td>

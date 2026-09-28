@@ -105,6 +105,8 @@ export interface AppDocument {
   category: DocumentCategoryApi;
   contract: { id: string; number: number; client: { id: string; name: string } };
   uploadedBy: { id: string; name: string };
+  /** Versão do contrato que originou o arquivo (PDFs gerados); null em uploads manuais. */
+  versionNumber: number | null;
   createdAt: string;
 }
 

@@ -4,6 +4,7 @@ import {
   ArrowLeft, Send, Download, FileText, Check, Edit2, CreditCard,
   Clock, AlertCircle, Upload, Paperclip
 } from 'lucide-react';
+import ContractPdfPanel from '../components/ContractPdfPanel';
 import StatusBadge from '../components/StatusBadge';
 import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
 import { contractsService } from '../services/contracts';
@@ -75,6 +76,12 @@ export default function ContractDetailPage() {
   const totalPending = contractPayments.filter(p => p.status !== 'pago' && p.status !== 'cancelado').reduce((s, p) => s + p.value, 0);
   const history = historyData?.data ?? [];
   const contractDocs = documentsData?.data ?? [];
+  // PDF (gerado pelo sistema) que corresponde exatamente à versão atual do contrato.
+  const currentVersionNumber = contract?.currentVersion?.versionNumber ?? null;
+  const currentPdf =
+    currentVersionNumber === null
+      ? null
+      : (contractDocs.find((d) => d.fileType === 'PDF' && d.versionNumber === currentVersionNumber) ?? null);
 
   // --- Status change -------------------------------------------------
   const [statusDraft, setStatusDraft] = useState<ContractStatusApi | ''>('');
@@ -347,7 +354,7 @@ export default function ContractDetailPage() {
                   </button>
                   <button onClick={() => setActiveTab('documento')} className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left" style={{ borderColor: 'var(--color-border)' }}>
                     <FileText size={15} style={{ color: '#475569' }} />
-                    <span className="text-sm font-medium text-slate-700">Ver documento gerado</span>
+                    <span className="text-sm font-medium text-slate-700">{currentPdf ? 'Ver PDF' : 'Gerar PDF'}</span>
                   </button>
                 </div>
               </div>
@@ -356,57 +363,61 @@ export default function ContractDetailPage() {
 
           {activeTab === 'documento' && (
             <div>
-              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-                <h3 className="text-sm font-semibold text-slate-900">Documento do contrato — v{contract.currentVersion?.versionNumber ?? 1}</h3>
-                <div className="flex items-center gap-2">
-                  <select value={uploadCategory} onChange={e => setUploadCategory(e.target.value as DocumentCategoryApi)} className="px-2 py-1.5 text-xs border rounded-lg" style={{ borderColor: 'var(--color-border)' }}>
-                    {DOC_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg hover:bg-slate-50 text-slate-600 disabled:opacity-50"
-                    style={{ borderColor: 'var(--color-border)' }}
-                  >
-                    <Upload size={12} /> {uploading ? 'Enviando...' : 'Anexar arquivo'}
-                  </button>
-                  <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelected} />
+              <ContractPdfPanel
+                contractId={contract.id}
+                contractNumber={contract.number}
+                versionNumber={currentVersionNumber}
+                content={contract.currentVersion?.content ?? null}
+                pdf={currentPdf}
+                onGenerated={refetchDocuments}
+              />
+
+              <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--color-border)' }}>
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Arquivos anexados</h4>
+                  <div className="flex items-center gap-2">
+                    <select value={uploadCategory} onChange={e => setUploadCategory(e.target.value as DocumentCategoryApi)} className="px-2 py-1.5 text-xs border rounded-lg" style={{ borderColor: 'var(--color-border)' }} aria-label="Categoria do arquivo">
+                      {DOC_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg hover:bg-slate-50 text-slate-600 disabled:opacity-50"
+                      style={{ borderColor: 'var(--color-border)' }}
+                    >
+                      <Upload size={12} /> {uploading ? 'Enviando...' : 'Anexar arquivo'}
+                    </button>
+                    <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelected} />
+                  </div>
                 </div>
-              </div>
 
-              <div className="rounded-xl border p-6" style={{ borderColor: 'var(--color-border)', backgroundColor: '#FAFAFA' }}>
-                {contract.currentVersion ? (
-                  <pre className="whitespace-pre-wrap text-left max-w-2xl mx-auto" style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', lineHeight: '1.8', color: '#374151' }}>
-                    {contract.currentVersion.content}
-                  </pre>
+                {contractDocs.length === 0 ? (
+                  <p className="text-sm text-slate-400 py-2">Nenhum arquivo anexado.</p>
                 ) : (
-                  <p className="text-sm text-center text-slate-400">Nenhuma versão gerada ainda.</p>
-                )}
-              </div>
-
-              {contractDocs.length > 0 && (
-                <div className="mt-5">
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Arquivos anexados</h4>
                   <div className="space-y-2">
                     {contractDocs.map(d => (
-                      <div
+                      <button
+                        type="button"
                         key={d.id}
-                        className="flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 cursor-pointer transition-colors"
+                        className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left"
                         style={{ borderColor: 'var(--color-border)' }}
                         onClick={() => documentsService.download(d.id, d.fileName)}
                       >
                         <Paperclip size={14} className="text-slate-400 flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium text-slate-800 truncate">{d.fileName}</div>
-                          <div className="text-xs text-slate-400">{(d.sizeBytes / 1024).toFixed(0)} KB · {new Date(d.createdAt).toLocaleDateString('pt-BR')}</div>
+                          <div className="text-xs text-slate-400">
+                            {(d.sizeBytes / 1024).toFixed(0)} KB · {new Date(d.createdAt).toLocaleDateString('pt-BR')}
+                            {d.versionNumber ? ` · versão ${d.versionNumber}` : ''}
+                          </div>
                         </div>
                         <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full flex-shrink-0">{d.category}</span>
                         <Download size={13} className="text-slate-400 flex-shrink-0" />
-                      </div>
+                      </button>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           )}
 

@@ -1,10 +1,10 @@
+import { Prisma } from '@prisma/client';
 import type {
   Client,
   Contract,
   ContractStatus,
   ContractTemplate,
   ContractVersion,
-  Prisma,
   PrismaClient,
   User,
 } from '@prisma/client';
@@ -18,6 +18,8 @@ import {
   contractStatusTransitionsFrom,
 } from '../../shared/domain/status-map';
 import { ConflictError, NotFoundError } from '../../shared/errors';
+import { generateContractPdf } from '../../shared/pdf/contract-pdf';
+import { removeFile, saveFile } from '../../shared/storage/local-file-storage';
 import { paginationSkipTake, toPaginated, type Paginated, type PaginationQuery } from '../../shared/http/pagination';
 import type { ContractWithRelations } from '../../shared/utils/serialize-contract';
 import type {
@@ -53,7 +55,7 @@ export interface ContractActor {
 
 type PrismaDeps = Pick<
   PrismaClient,
-  'contract' | 'client' | 'contractTemplate' | 'contractVersion' | 'user' | 'office' | 'notification' | 'auditLog' | '$transaction'
+  'contract' | 'client' | 'contractTemplate' | 'contractVersion' | 'document' | 'user' | 'office' | 'notification' | 'auditLog' | '$transaction'
 >;
 
 export class ContractService {
@@ -264,6 +266,89 @@ export class ContractService {
     });
 
     return this.getById(actor.officeId, id);
+  }
+
+  /**
+   * Materializa uma ContractVersion como PDF imutável, salvo pelo storage e
+   * registrado como Document. O conteúdo vem SEMPRE de ContractVersion.content
+   * (fonte de verdade no banco) — nada vindo do frontend entra no PDF.
+   *
+   * Idempotente: `Document.contractVersionId` é único, então cada versão tem
+   * no máximo um PDF. Chamadas repetidas/concorrentes devolvem o mesmo documento.
+   */
+  async generatePdf(
+    actor: ContractActor,
+    contractId: string,
+    options: { versionNumber?: number } = {},
+  ): Promise<{ documentId: string; created: boolean }> {
+    // 404 se o contrato não existir OU for de outro escritório.
+    const contract = await this.getById(actor.officeId, contractId);
+
+    // A busca por (contractId, versionNumber) impede usar versão de outro contrato.
+    const version =
+      options.versionNumber === undefined
+        ? contract.versions[0]
+        : await this.prisma.contractVersion.findFirst({
+            where: { contractId: contract.id, versionNumber: options.versionNumber },
+          });
+    if (!version) {
+      throw new NotFoundError('Versão do contrato não encontrada');
+    }
+
+    const existing = await this.prisma.document.findUnique({ where: { contractVersionId: version.id } });
+    if (existing) {
+      return { documentId: existing.id, created: false };
+    }
+
+    const office = await this.prisma.office.findUniqueOrThrow({ where: { id: actor.officeId } });
+    const pdf = await generateContractPdf({
+      contract: { number: contract.number },
+      version: { versionNumber: version.versionNumber, content: version.content, createdAt: version.createdAt },
+      office,
+    });
+    const saved = await saveFile(actor.officeId, pdf.fileName, pdf.buffer);
+
+    try {
+      const document = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const created = await tx.document.create({
+          data: {
+            officeId: actor.officeId,
+            contractId: contract.id,
+            contractVersionId: version.id,
+            uploadedById: actor.userId,
+            fileName: pdf.fileName,
+            fileType: 'PDF',
+            mimeType: pdf.mimeType,
+            sizeBytes: saved.sizeBytes,
+            category: 'CONTRATO',
+            storagePath: saved.storagePath,
+          },
+        });
+
+        await writeAuditLog(tx, {
+          officeId: actor.officeId,
+          actorId: actor.userId,
+          action: AUDIT_ACTIONS.CONTRACT_PDF_GENERATED,
+          entityType: 'Contract',
+          entityId: contract.id,
+          entityLabel: `Contrato #${contract.number}`,
+        });
+
+        return created;
+      });
+
+      return { documentId: document.id, created: true };
+    } catch (error) {
+      // O arquivo já estava no disco: não deixamos órfão se o registro falhar.
+      await removeFile(saved.storagePath);
+
+      // Outra requisição gerou o PDF desta versão primeiro (unique em contractVersionId).
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const winner = await this.prisma.document.findUnique({ where: { contractVersionId: version.id } });
+        if (winner) return { documentId: winner.id, created: false };
+      }
+      throw error;
+    }
   }
 
   private renderContractContent(

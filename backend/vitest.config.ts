@@ -29,6 +29,8 @@ export default defineConfig({
       JWT_EXPIRES_IN: '1h',
       CORS_ORIGIN: 'http://localhost:5173',
       LOG_LEVEL: 'silent',
+      // Arquivos gravados pelos testes (PDFs gerados) ficam fora de ./uploads.
+      UPLOADS_DIR: './uploads-test',
     },
     coverage: {
       provider: 'v8',

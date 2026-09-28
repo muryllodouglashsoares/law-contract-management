@@ -13,6 +13,7 @@ import type { ListDocumentsQuery } from './document.schemas';
 const DOCUMENT_INCLUDE = {
   contract: { select: { id: true, number: true, client: { select: { id: true, name: true } } } },
   uploadedBy: { select: { id: true, name: true } },
+  contractVersion: { select: { versionNumber: true } },
 };
 
 export interface DocumentActor {
