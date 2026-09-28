@@ -17,7 +17,12 @@ coverage
 backend
 
 # Arquivos do ambiente Figma Make / editor, irrelevantes para a imagem de produção.
-.figma
+# ATENÇÃO: vite.config.ts importa .figma/make/site.json em build-time, então
+# esse arquivo PRECISA estar no contexto do Docker. Ignora-se apenas o resto.
+.figma/*
+!.figma/make
+.figma/make/*
+!.figma/make/site.json
 .mise.toml
 AGENTS.md
 CLAUDE.md
