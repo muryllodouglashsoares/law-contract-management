@@ -34,4 +34,5 @@ COPY package.json ./
 
 EXPOSE 3333
 
-CMD ["node", "dist/src/server.js"]
+# Aplica migrations pendentes antes de subir a API (exige DATABASE_URL e DIRECT_URL).
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/server.js"]
