@@ -127,6 +127,7 @@ export default function DocumentsPage() {
         <input
           ref={fileInputRef}
           type="file"
+          accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.txt"
           className="hidden"
           onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }}
         />
@@ -136,7 +137,7 @@ export default function DocumentsPage() {
               <Upload size={20} style={{ color: 'var(--color-primary)' }} />
             </div>
             <p className="text-sm font-semibold text-slate-700">Arraste arquivos aqui ou clique para selecionar</p>
-            <p className="text-xs mt-1" style={{ color: 'var(--color-muted-foreground)' }}>Máx. 10 MB por arquivo · selecione o contrato de destino acima</p>
+            <p className="text-xs mt-1" style={{ color: 'var(--color-muted-foreground)' }}>PDF, imagem, Word, Excel ou TXT · máx. 10 MB por arquivo · selecione o contrato de destino acima</p>
           </>
         )}
         {uploadState === 'uploading' && (

@@ -19,7 +19,9 @@ import {
 } from '../../shared/domain/status-map';
 import { ConflictError, NotFoundError } from '../../shared/errors';
 import { generateContractPdf } from '../../shared/pdf/contract-pdf';
-import { removeFile, saveFile } from '../../shared/storage/local-file-storage';
+import { getStorage, removeQuietly, type StorageDriver } from '../../shared/storage';
+import { keyBelongsToOffice } from '../../shared/storage/storage-key';
+import { sha256Hex } from '../../shared/utils/hash';
 import { paginationSkipTake, toPaginated, type Paginated, type PaginationQuery } from '../../shared/http/pagination';
 import type { ContractWithRelations } from '../../shared/utils/serialize-contract';
 import type {
@@ -59,7 +61,10 @@ type PrismaDeps = Pick<
 >;
 
 export class ContractService {
-  constructor(private readonly prisma: PrismaDeps) {}
+  constructor(
+    private readonly prisma: PrismaDeps,
+    private readonly storage: StorageDriver = getStorage(),
+  ) {}
 
   async list(officeId: string, query: ListContractsQuery): Promise<Paginated<ContractWithRelations>> {
     const where: Prisma.ContractWhereInput = {
@@ -269,12 +274,17 @@ export class ContractService {
   }
 
   /**
-   * Materializa uma ContractVersion como PDF imutável, salvo pelo storage e
-   * registrado como Document. O conteúdo vem SEMPRE de ContractVersion.content
+   * Gera (sob demanda) o PDF de uma ContractVersion, guarda-o no storage e o
+   * registra como Document. O conteúdo vem SEMPRE de ContractVersion.content
    * (fonte de verdade no banco) — nada vindo do frontend entra no PDF.
    *
-   * Idempotente: `Document.contractVersionId` é único, então cada versão tem
-   * no máximo um PDF. Chamadas repetidas/concorrentes devolvem o mesmo documento.
+   * Fluxo: ContractVersion → PDFKit → Buffer → SHA-256 → storage → Document(contentHash).
+   * O hash é calculado sobre o MESMO Buffer que vai para o storage (sem cópia extra).
+   *
+   * Idempotente: `Document.contractVersionId` é único, então cada versão tem no
+   * máximo um PDF; chamadas repetidas/concorrentes devolvem o mesmo documento.
+   * Como o PDF é determinístico (mesma versão → mesmos bytes), se o objeto sumir do
+   * storage (ex.: disco efêmero antigo) ele é regenerado na mesma chave, sem novo Document.
    */
   async generatePdf(
     actor: ContractActor,
@@ -297,16 +307,19 @@ export class ContractService {
 
     const existing = await this.prisma.document.findUnique({ where: { contractVersionId: version.id } });
     if (existing) {
+      await this.restoreMissingPdf(actor, contract, version, existing);
       return { documentId: existing.id, created: false };
     }
 
-    const office = await this.prisma.office.findUniqueOrThrow({ where: { id: actor.officeId } });
-    const pdf = await generateContractPdf({
-      contract: { number: contract.number },
-      version: { versionNumber: version.versionNumber, content: version.content, createdAt: version.createdAt },
-      office,
+    const pdf = await this.renderPdf(actor.officeId, contract, version);
+
+    // O storage não participa da transação do banco: grava primeiro e, se o registro falhar, remove o objeto.
+    const stored = await this.storage.save({
+      officeId: actor.officeId,
+      fileName: pdf.fileName,
+      contentType: pdf.mimeType,
+      body: pdf.buffer,
     });
-    const saved = await saveFile(actor.officeId, pdf.fileName, pdf.buffer);
 
     try {
       const document = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -319,9 +332,10 @@ export class ContractService {
             fileName: pdf.fileName,
             fileType: 'PDF',
             mimeType: pdf.mimeType,
-            sizeBytes: saved.sizeBytes,
+            sizeBytes: stored.sizeBytes,
             category: 'CONTRATO',
-            storagePath: saved.storagePath,
+            storagePath: stored.key,
+            contentHash: pdf.contentHash,
           },
         });
 
@@ -339,8 +353,8 @@ export class ContractService {
 
       return { documentId: document.id, created: true };
     } catch (error) {
-      // O arquivo já estava no disco: não deixamos órfão se o registro falhar.
-      await removeFile(saved.storagePath);
+      // O objeto já estava no storage: não deixamos órfão se o registro falhar.
+      await removeQuietly(this.storage, stored.key, 'contract.generatePdf');
 
       // Outra requisição gerou o PDF desta versão primeiro (unique em contractVersionId).
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -348,6 +362,58 @@ export class ContractService {
         if (winner) return { documentId: winner.id, created: false };
       }
       throw error;
+    }
+  }
+
+  private async renderPdf(
+    officeId: string,
+    contract: Pick<Contract, 'number'>,
+    version: Pick<ContractVersion, 'versionNumber' | 'content' | 'createdAt'>,
+  ) {
+    const office = await this.prisma.office.findUniqueOrThrow({ where: { id: officeId } });
+    const pdf = await generateContractPdf({
+      contract: { number: contract.number },
+      version: { versionNumber: version.versionNumber, content: version.content, createdAt: version.createdAt },
+      office,
+    });
+    return { ...pdf, contentHash: sha256Hex(pdf.buffer) };
+  }
+
+  /**
+   * Um Document de PDF cujo objeto não existe mais no storage é regenerado a partir da
+   * ContractVersion, na mesma chave. Falha de verificação nunca derruba a requisição.
+   */
+  private async restoreMissingPdf(
+    actor: ContractActor,
+    contract: Pick<Contract, 'number'>,
+    version: Pick<ContractVersion, 'versionNumber' | 'content' | 'createdAt'>,
+    document: { id: string; storagePath: string; contentHash: string | null; sizeBytes: number; mimeType: string },
+  ): Promise<void> {
+    if (!keyBelongsToOffice(document.storagePath, actor.officeId)) return;
+
+    try {
+      if (await this.storage.exists(document.storagePath)) return;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(JSON.stringify({ level: 'error', msg: 'Não foi possível verificar o PDF no storage', documentId: document.id, err: String(error) }));
+      return;
+    }
+
+    const pdf = await this.renderPdf(actor.officeId, contract, version);
+    await this.storage.save({
+      officeId: actor.officeId,
+      fileName: 'restore.pdf',
+      contentType: pdf.mimeType,
+      body: pdf.buffer,
+      key: document.storagePath,
+    });
+
+    if (pdf.contentHash !== document.contentHash || pdf.buffer.byteLength !== document.sizeBytes) {
+      // Mesmo conteúdo lógico, bytes diferentes (ex.: PDFKit atualizado): o hash passa a refletir o arquivo atual.
+      await this.prisma.document.update({
+        where: { id: document.id },
+        data: { contentHash: pdf.contentHash, sizeBytes: pdf.buffer.byteLength },
+      });
     }
   }
 

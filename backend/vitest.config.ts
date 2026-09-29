@@ -29,7 +29,8 @@ export default defineConfig({
       JWT_EXPIRES_IN: '1h',
       CORS_ORIGIN: 'http://localhost:5173',
       LOG_LEVEL: 'silent',
-      // Arquivos gravados pelos testes (PDFs gerados) ficam fora de ./uploads.
+      // Testes sempre usam o driver local (nunca um bucket real); arquivos ficam fora de ./uploads.
+      STORAGE_DRIVER: 'local',
       UPLOADS_DIR: './uploads-test',
     },
     coverage: {

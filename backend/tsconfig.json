@@ -19,6 +19,6 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": false
   },
-  "include": ["src/**/*.ts", "prisma/seed.ts", "tests/**/*.ts"],
+  "include": ["src/**/*.ts", "prisma/seed.ts", "scripts/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

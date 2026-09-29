@@ -6,6 +6,21 @@ import { z } from 'zod';
  * Qualquer variável obrigatória ausente ou inválida faz a aplicação
  * falhar imediatamente na inicialização, com uma mensagem clara.
  */
+/** String opcional: valor vazio (ex.: `S3_BUCKET=` no .env) conta como ausente. */
+const optionalString = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value) => (value ? value : undefined));
+
+const NEON_S3_REQUIRED_VARS = [
+  'S3_ENDPOINT',
+  'S3_REGION',
+  'S3_BUCKET',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
+] as const;
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -31,13 +46,43 @@ const envSchema = z.object({
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
 
-  // Diretório onde os arquivos de documentos ficam armazenados em disco
-  // (desenvolvimento). Ver src/shared/storage/local-file-storage.ts.
+  // Driver de armazenamento de documentos (ver src/shared/storage/).
+  //  - local   → disco (desenvolvimento/testes). EFÊMERO em containers como o do Render.
+  //  - neon-s3 → Neon Object Storage (API S3-compatible, bucket privado). Use em produção.
+  // A escolha é sempre explícita: nada muda de driver "por conta própria" conforme NODE_ENV.
+  STORAGE_DRIVER: z.enum(['local', 'neon-s3']).default('local'),
+
+  // Diretório do driver `local`.
   UPLOADS_DIR: z.string().default('./uploads'),
+
+  // Credenciais do driver `neon-s3`. Existem SOMENTE no backend (env vars do Render);
+  // são obrigatórias apenas quando STORAGE_DRIVER=neon-s3 (validado no superRefine abaixo).
+  S3_ENDPOINT: optionalString,
+  S3_REGION: optionalString,
+  S3_BUCKET: optionalString,
+  S3_ACCESS_KEY_ID: optionalString,
+  S3_SECRET_ACCESS_KEY: optionalString,
+  // Endpoints S3-compatible costumam exigir path-style (https://host/bucket/key).
+  S3_FORCE_PATH_STYLE: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((value) => value === 'true'),
 
   // Tamanho máximo de upload de um documento, em bytes. Mantido alinhado
   // com o texto já exibido na tela de Documentos ("Máx. 10 MB por arquivo").
   MAX_UPLOAD_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+}).superRefine((config, ctx) => {
+  if (config.STORAGE_DRIVER !== 'neon-s3') return;
+
+  for (const name of NEON_S3_REQUIRED_VARS) {
+    if (!config[name]) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [name],
+        message: `${name} é obrigatória quando STORAGE_DRIVER=neon-s3`,
+      });
+    }
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -59,3 +104,10 @@ function loadEnv(): Env {
 }
 
 export const env = loadEnv();
+
+if (env.NODE_ENV === 'production' && env.STORAGE_DRIVER === 'local') {
+  // eslint-disable-next-line no-console
+  console.warn(
+    '⚠️  STORAGE_DRIVER=local em produção: o disco do container é efêmero e os documentos serão perdidos em deploy/restart. Use STORAGE_DRIVER=neon-s3.',
+  );
+}

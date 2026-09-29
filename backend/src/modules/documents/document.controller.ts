@@ -1,5 +1,4 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { createReadStream } from 'node:fs';
 
 import { prisma } from '../../shared/database/prisma';
 import { ValidationError } from '../../shared/errors';
@@ -47,11 +46,16 @@ export const documentController = {
       );
     }
 
+    // O limite (MAX_UPLOAD_SIZE_BYTES) é aplicado pelo @fastify/multipart durante a leitura:
+    // ao estourar, o stream é interrompido e nada é salvo nem registrado.
     let buffer: Buffer;
     try {
       buffer = await filePart.toBuffer();
-    } catch {
-      throw new ValidationError('Arquivo excede o tamanho máximo permitido');
+    } catch (error) {
+      if ((error as { code?: string }).code === 'FST_REQ_FILE_TOO_LARGE') {
+        throw new ValidationError('Arquivo excede o tamanho máximo permitido');
+      }
+      throw error;
     }
 
     const document = await documentService.upload(
@@ -71,8 +75,11 @@ export const documentController = {
     const file = await documentService.getFileForDownload(request.user.officeId, request.params.id);
 
     reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(file.fileName)}"`);
+    // Documentos jurídicos são privados: nada de cache compartilhado nem sniffing de tipo.
+    reply.header('Cache-Control', 'private, no-store');
+    reply.header('X-Content-Type-Options', 'nosniff');
     reply.type(file.mimeType);
-    return reply.send(createReadStream(file.absolutePath));
+    return reply.send(file.stream);
   },
 
   async remove(request: FastifyRequest<{ Params: DocumentIdParams }>, reply: FastifyReply) {

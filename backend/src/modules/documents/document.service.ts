@@ -1,12 +1,16 @@
-import path from 'node:path';
+import type { Readable } from 'node:stream';
 
 import type { Prisma, PrismaClient } from '@prisma/client';
 
 import { AUDIT_ACTIONS, writeAuditLog } from '../../shared/domain/audit';
 import { DOCUMENT_CATEGORY_FROM_API } from '../../shared/domain/status-map';
-import { NotFoundError, ValidationError } from '../../shared/errors';
+import { env } from '../../config/env';
+import { NotFoundError } from '../../shared/errors';
 import { paginationSkipTake, toPaginated, type Paginated, type PaginationQuery } from '../../shared/http/pagination';
-import { absolutePath, removeFile, saveFile } from '../../shared/storage/local-file-storage';
+import { getStorage, removeQuietly, type StorageDriver } from '../../shared/storage';
+import { keyBelongsToOffice } from '../../shared/storage/storage-key';
+import { StorageObjectNotFoundError } from '../../shared/storage/storage.types';
+import { validateUpload } from '../../shared/storage/upload-validation';
 import type { DocumentWithRelations } from '../../shared/utils/serialize-document';
 import type { ListDocumentsQuery } from './document.schemas';
 
@@ -25,13 +29,22 @@ export interface UploadDocumentInput {
   contractId: string;
   category?: string;
   fileName: string;
+  /** MIME declarado pelo cliente — só é conferido; o MIME gravado é o canônico do formato validado. */
   mimeType: string;
   buffer: Buffer;
+}
+
+export interface DocumentDownload {
+  stream: Readable;
+  fileName: string;
+  mimeType: string;
 }
 
 export class DocumentService {
   constructor(
     private readonly prisma: Pick<PrismaClient, 'document' | 'contract' | 'auditLog' | '$transaction'>,
+    private readonly storage: StorageDriver = getStorage(),
+    private readonly maxUploadBytes: number = env.MAX_UPLOAD_SIZE_BYTES,
   ) {}
 
   async list(officeId: string, query: ListDocumentsQuery): Promise<Paginated<DocumentWithRelations>> {
@@ -69,11 +82,16 @@ export class DocumentService {
     return document as DocumentWithRelations;
   }
 
+  /**
+   * Ordem (o storage NÃO participa da transação do Prisma):
+   *   1. valida usuário/escritório → contrato → arquivo (tipo real, tamanho);
+   *   2. grava o objeto no storage;
+   *   3. cria Document + auditoria em uma transação;
+   *   4. se o passo 3 falhar, remove o objeto do passo 2 (sem mascarar o erro original).
+   * Assim nunca sobra registro apontando para arquivo inexistente; no pior caso
+   * (remoção falhar) sobra um objeto órfão, registrado no log com a chave.
+   */
   async upload(actor: DocumentActor, input: UploadDocumentInput): Promise<DocumentWithRelations> {
-    if (!input.fileName) {
-      throw new ValidationError('Nome do arquivo é obrigatório');
-    }
-
     const contract = await this.prisma.contract.findFirst({
       where: { id: input.contractId, officeId: actor.officeId },
     });
@@ -81,49 +99,72 @@ export class DocumentService {
       throw new NotFoundError('Contrato não encontrado');
     }
 
-    const saved = await saveFile(actor.officeId, input.fileName, input.buffer);
-    const fileType = path.extname(input.fileName).replace('.', '').toUpperCase() || 'ARQUIVO';
+    const file = validateUpload(
+      { fileName: input.fileName, declaredMimeType: input.mimeType, buffer: input.buffer },
+      { maxBytes: this.maxUploadBytes },
+    );
 
-    const created = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const document = await tx.document.create({
-        data: {
-          officeId: actor.officeId,
-          contractId: contract.id,
-          uploadedById: actor.userId,
-          fileName: input.fileName,
-          fileType,
-          mimeType: input.mimeType,
-          sizeBytes: saved.sizeBytes,
-          category: input.category ? DOCUMENT_CATEGORY_FROM_API(input.category) : 'DOCUMENTO',
-          storagePath: saved.storagePath,
-        },
-      });
-
-      await writeAuditLog(tx, {
-        officeId: actor.officeId,
-        actorId: actor.userId,
-        action: AUDIT_ACTIONS.DOCUMENT_UPLOADED,
-        entityType: 'Document',
-        entityId: document.id,
-        entityLabel: document.fileName,
-      });
-
-      return document;
+    const stored = await this.storage.save({
+      officeId: actor.officeId,
+      fileName: file.fileName,
+      contentType: file.mimeType,
+      body: input.buffer,
     });
+
+    let created;
+    try {
+      created = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const document = await tx.document.create({
+          data: {
+            officeId: actor.officeId,
+            contractId: contract.id,
+            uploadedById: actor.userId,
+            fileName: file.fileName,
+            fileType: file.fileType,
+            mimeType: file.mimeType,
+            sizeBytes: stored.sizeBytes,
+            category: input.category ? DOCUMENT_CATEGORY_FROM_API(input.category) : 'DOCUMENTO',
+            storagePath: stored.key,
+          },
+        });
+
+        await writeAuditLog(tx, {
+          officeId: actor.officeId,
+          actorId: actor.userId,
+          action: AUDIT_ACTIONS.DOCUMENT_UPLOADED,
+          entityType: 'Document',
+          entityId: document.id,
+          entityLabel: document.fileName,
+        });
+
+        return document;
+      });
+    } catch (error) {
+      await removeQuietly(this.storage, stored.key, 'document.upload');
+      throw error;
+    }
 
     return this.getById(actor.officeId, created.id);
   }
 
-  async getFileForDownload(
-    officeId: string,
-    id: string,
-  ): Promise<{ absolutePath: string; fileName: string; mimeType: string }> {
-    const document = await this.getById(officeId, id);
-    return {
-      absolutePath: absolutePath(document.storagePath),
-      fileName: document.fileName,
-      mimeType: document.mimeType,
-    };
+  /** Abre o arquivo por stream. Só chega ao storage depois de achar o Document com `{ id, officeId }`. */
+  async getFileForDownload(officeId: string, id: string): Promise<DocumentDownload> {
+    const document = await this.getById(officeId, id); // 404 para documento de outro escritório
+
+    // Defesa em profundidade: a chave gravada tem de pertencer ao escritório autenticado.
+    if (!keyBelongsToOffice(document.storagePath, officeId)) {
+      throw new NotFoundError('Documento não encontrado');
+    }
+
+    try {
+      const stream = await this.storage.get(document.storagePath);
+      return { stream, fileName: document.fileName, mimeType: document.mimeType };
+    } catch (error) {
+      if (error instanceof StorageObjectNotFoundError) {
+        throw new NotFoundError('Arquivo não encontrado no armazenamento');
+      }
+      throw error;
+    }
   }
 
   async remove(actor: DocumentActor, id: string): Promise<void> {
@@ -142,6 +183,8 @@ export class DocumentService {
       });
     });
 
-    await removeFile(document.storagePath);
+    // Banco primeiro, storage depois: se a remoção do objeto falhar, sobra apenas um
+    // objeto órfão (inofensivo, logado) — nunca um Document apontando para arquivo inexistente.
+    await removeQuietly(this.storage, document.storagePath, 'document.remove');
   }
 }

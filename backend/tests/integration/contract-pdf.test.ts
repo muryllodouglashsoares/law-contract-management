@@ -1,14 +1,20 @@
-import { readFile } from 'node:fs/promises';
-
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../../src/app';
 import { prisma } from '../../src/shared/database/prisma';
-import { absolutePath } from '../../src/shared/storage/local-file-storage';
+import { getStorage } from '../../src/shared/storage';
+import { sha256Hex } from '../../src/shared/utils/hash';
 import { createFixtureClientAndTemplate, createFixtureUser, resetDatabase, type TestFixture } from './helpers/db';
 
 const RANDOM_UUID = '00000000-0000-4000-8000-000000000000';
+
+/** Lê o objeto pelo driver de storage ativo (não assume disco local). */
+async function readStored(key: string): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of await getStorage().get(key)) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
 
 describe('POST /contracts/:id/pdf', () => {
   let app: FastifyInstance;
@@ -100,7 +106,10 @@ describe('POST /contracts/:id/pdf', () => {
     const row = await prisma.document.findUniqueOrThrow({ where: { id: document.id } });
     expect(row.officeId).toBe(fixture.officeId);
     expect(row.contractVersionId).not.toBeNull();
-    const file = await readFile(absolutePath(row.storagePath));
+    const file = await readStored(row.storagePath);
+    expect(row.storagePath.startsWith(`${fixture.officeId}/`)).toBe(true);
+    expect(row.contentHash).toBe(sha256Hex(file));
+    expect(row.contentHash).toMatch(/^[0-9a-f]{64}$/);
     expect(file.byteLength).toBe(document.sizeBytes);
     expect(file.subarray(0, 5).toString('latin1')).toBe('%PDF-');
     expect(file.subarray(-32).toString('latin1')).toContain('%%EOF');
@@ -195,7 +204,7 @@ describe('POST /contracts/:id/pdf', () => {
     const { token, creatorToken, contractId } = await setup();
 
     const v1 = (await generate(token, contractId)).json().document;
-    const v1Bytes = await readFile(absolutePath((await prisma.document.findUniqueOrThrow({ where: { id: v1.id } })).storagePath));
+    const v1Bytes = await readStored((await prisma.document.findUniqueOrThrow({ where: { id: v1.id } })).storagePath);
 
     const edit = await app.inject({
       method: 'PATCH',
@@ -216,7 +225,8 @@ describe('POST /contracts/:id/pdf', () => {
     const v1Again = await generate(token, contractId, { versionNumber: 1 });
     expect(v1Again.json().document.id).toBe(v1.id);
     const v1Row = await prisma.document.findUniqueOrThrow({ where: { id: v1.id } });
-    expect((await readFile(absolutePath(v1Row.storagePath))).equals(v1Bytes)).toBe(true);
+    expect((await readStored(v1Row.storagePath)).equals(v1Bytes)).toBe(true);
+    expect(v1Row.contentHash).toBe(sha256Hex(v1Bytes));
 
     // Cada Document aponta para a versão que o originou.
     const versions = await prisma.contractVersion.findMany({ where: { contractId }, orderBy: { versionNumber: 'asc' } });
@@ -258,5 +268,45 @@ describe('POST /contracts/:id/pdf', () => {
       headers: { authorization: `Bearer ${other.token}` },
     });
     expect(foreign.statusCode).toBe(404);
+  });
+
+  it('versões diferentes têm hashes diferentes e o hash bate com o download', async () => {
+    const { token, creatorToken, contractId } = await setup();
+
+    const v1 = (await generate(token, contractId)).json().document;
+    await app.inject({
+      method: 'PATCH',
+      url: `/contracts/${contractId}`,
+      headers: { authorization: `Bearer ${creatorToken}` },
+      payload: { object: 'Objeto alterado para gerar a versão 2' },
+    });
+    const v2 = (await generate(token, contractId)).json().document;
+
+    expect(v1.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(v2.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(v2.contentHash).not.toBe(v1.contentHash);
+
+    const download = await app.inject({
+      method: 'GET',
+      url: `/documents/${v2.id}/download`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(sha256Hex(download.rawPayload)).toBe(v2.contentHash);
+  });
+
+  it('regenera o objeto na mesma chave quando ele some do storage, sem criar novo Document', async () => {
+    const { token, contractId } = await setup();
+    const first = (await generate(token, contractId)).json().document;
+    const row = await prisma.document.findUniqueOrThrow({ where: { id: first.id } });
+    const original = await readStored(row.storagePath);
+
+    await getStorage().remove(row.storagePath);
+    expect(await getStorage().exists(row.storagePath)).toBe(false);
+
+    const again = await generate(token, contractId);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().document.id).toBe(first.id);
+    expect((await readStored(row.storagePath)).equals(original)).toBe(true);
+    expect(await prisma.document.count({ where: { contractId } })).toBe(1);
   });
 });

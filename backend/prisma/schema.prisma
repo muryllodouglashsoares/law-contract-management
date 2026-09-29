@@ -246,7 +246,12 @@ model Document {
   mimeType     String
   sizeBytes    Int
   category     DocumentCategory @default(DOCUMENTO)
+  /// Chave do objeto no storage (`{officeId}/{uuid}.{ext}`). O nome histórico
+  /// da coluna foi mantido para não exigir renomeação; vale para qualquer driver.
   storagePath  String
+  /// SHA-256 (hex, 64 chars) do conteúdo binário. Preenchido nos PDFs gerados
+  /// a partir de uma ContractVersion; null em uploads manuais e documentos antigos.
+  contentHash  String?          @db.Char(64)
   createdAt    DateTime         @default(now())
 
   office     Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)

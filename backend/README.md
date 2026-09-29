@@ -17,6 +17,7 @@ etapa. A integração real frontend → backend é um passo futuro.
 - [Arquitetura](#arquitetura)
 - [Instalação](#instalação)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
+- [Storage de documentos](#storage-de-documentos)
 - [Rodando com Docker (recomendado)](#rodando-com-docker-recomendado)
 - [Rodando localmente sem Docker](#rodando-localmente-sem-docker)
 - [Migrations](#migrations)
@@ -109,10 +110,100 @@ Veja `.env.example` para a lista completa e comentada. Resumo:
 | `JWT_EXPIRES_IN` | não | Validade do token (padrão: `1d`)                        |
 | `CORS_ORIGIN`    | não | Origem do frontend permitida via CORS                   |
 | `LOG_LEVEL`      | não | Nível de log do Pino (padrão: `info`)                    |
+| `STORAGE_DRIVER` | não | `local` (padrão) \| `neon-s3` — ver [Storage de documentos](#storage-de-documentos) |
+| `UPLOADS_DIR`    | não | Pasta do driver `local` (padrão: `./uploads`)           |
+| `MAX_UPLOAD_SIZE_BYTES` | não | Limite de upload por arquivo (padrão: 10 MB)     |
+| `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | **sim, se** `neon-s3` | Credenciais do bucket (somente no backend) |
+| `S3_FORCE_PATH_STYLE` | não | Path-style nas URLs S3 (padrão: `true`)             |
 
 Se `DATABASE_URL` ou `JWT_SECRET` estiverem ausentes ou inválidas, a
 aplicação **falha imediatamente ao iniciar**, com uma mensagem clara
 apontando o campo problemático (`src/config/env.ts`).
+
+## Storage de documentos
+
+Uploads e PDFs de contrato **não** dependem mais do disco do container. O
+`DocumentService` e o `ContractService` falam apenas com a interface
+`StorageDriver` (`src/shared/storage/`):
+
+```text
+Frontend → API (JWT + RBAC + officeId) → DocumentService → StorageDriver
+                                                             ├─ local    (dev/testes)
+                                                             └─ neon-s3  (produção) → bucket PRIVADO
+```
+
+- **Bucket privado, sem URL pública.** O download é sempre
+  `GET /documents/:id/download`: o backend autentica, busca o documento com
+  `{ id, officeId }` (documento de outro escritório → 404), abre o objeto e
+  repassa por **stream**. O navegador nunca recebe credenciais nem link do bucket.
+- **Chaves** `{officeId}/{uuid}.{ext}`; o nome original fica só em `Document.fileName`.
+  A extensão é sanitizada e o driver rejeita qualquer chave fora desse formato
+  (path traversal impossível). A chave é gravada em `Document.storagePath`.
+- **Upload** (`@fastify/multipart`, 1 arquivo, `MAX_UPLOAD_SIZE_BYTES`): o backend confere
+  extensão + MIME declarado + assinatura real do arquivo (magic bytes). Formatos aceitos:
+  PDF, PNG, JPG, DOC, DOCX, XLS, XLSX e TXT. `virus.exe` renomeado para `.pdf` é recusado.
+- **Consistência banco × storage** (o storage não entra na transação do Prisma):
+  no upload, grava o objeto → cria `Document` + auditoria → se o banco falhar, remove o
+  objeto (sem mascarar o erro original). Na exclusão, remove o registro primeiro e o
+  objeto depois; se a remoção do objeto falhar, só sobra um objeto órfão (logado com a chave).
+- **Resiliência**: o driver S3 repete erros transitórios (`503 SlowDown`, 5xx, 429, timeouts e
+  resets de rede) com backoff exponencial + jitter, no máximo 4 tentativas. Erros permanentes
+  (`AccessDenied`, `NoSuchKey`, `InvalidAccessKeyId`…) falham na hora.
+
+### PDFs de contrato
+
+`POST /contracts/:id/pdf` gera o PDF **sob demanda** a partir de `ContractVersion.content`
+(nada vindo do frontend entra no PDF), calcula o **SHA-256** do mesmo Buffer que vai para o
+storage e o grava em `Document.contentHash` (também exposto como `contentHash` na API).
+Continua idempotente (uma versão = no máximo um PDF, `Document.contractVersionId` único). Como o PDF é
+determinístico, se o objeto sumir do storage ele é regenerado na mesma chave ao pedir o PDF de novo.
+Uploads manuais e documentos antigos ficam com `contentHash = null`.
+
+### Configuração
+
+Desenvolvimento/testes (padrão, sem credenciais):
+
+```env
+STORAGE_DRIVER=local
+UPLOADS_DIR=./uploads
+```
+
+Produção (Render + Neon Object Storage) — defina em **Environment Variables** do serviço,
+nunca em arquivo versionado:
+
+```env
+STORAGE_DRIVER=neon-s3
+S3_ENDPOINT=https://your-object-storage-endpoint
+S3_REGION=your-region
+S3_BUCKET=your-private-bucket
+S3_ACCESS_KEY_ID=your-key
+S3_SECRET_ACCESS_KEY=your-secret
+```
+
+Com `STORAGE_DRIVER=neon-s3`, a ausência de qualquer variável `S3_*` derruba a
+inicialização listando o que falta. Com `STORAGE_DRIVER=local` em `NODE_ENV=production`, a
+aplicação sobe, mas registra um aviso (o disco do Render é efêmero). A escolha do driver é
+sempre explícita: nada muda sozinho conforme o ambiente.
+
+### Migrando arquivos locais existentes
+
+As chaves antigas (`{officeId}/{uuid}.{ext}`) já têm o formato novo, então basta copiar os arquivos
+preservando a chave — sem alterar o banco e sem apagar nada:
+
+```bash
+# com STORAGE_DRIVER=neon-s3 e as variáveis S3_* exportadas
+npm run storage:migrate-local -- --dry-run   # só mostra o que seria copiado
+npm run storage:migrate-local                # copia; pode rodar de novo (idempotente)
+```
+
+Arquivos que já se perderam no disco efêmero não podem ser recuperados; PDFs de contrato voltam
+sozinhos (regenerados) quando o PDF da versão é solicitado novamente.
+
+### Plano B (não implementado)
+
+Se o Neon Object Storage ficar indisponível para o projeto, basta um novo `StorageDriver`
+(ex.: `PostgresBlobStorageDriver` sobre uma tabela `document_blobs` com `bytea`, limite de 5 MB por
+arquivo) selecionado por `STORAGE_DRIVER`. Nenhum service precisa mudar.
 
 ## Rodando com Docker (recomendado)
 

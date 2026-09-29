@@ -19,6 +19,8 @@ export interface PublicDocument {
   uploadedBy: { id: string; name: string };
   /** Versão do contrato que originou este PDF; null em uploads manuais. */
   versionNumber: number | null;
+  /** SHA-256 do PDF gerado (para conferência de integridade); null em uploads manuais. */
+  contentHash: string | null;
   createdAt: string;
 }
 
@@ -33,6 +35,7 @@ export function toPublicDocument(document: DocumentWithRelations): PublicDocumen
     contract: document.contract,
     uploadedBy: document.uploadedBy,
     versionNumber: document.contractVersion?.versionNumber ?? null,
+    contentHash: document.contentHash,
     createdAt: document.createdAt.toISOString(),
   };
 }
