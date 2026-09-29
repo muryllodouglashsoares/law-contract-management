@@ -21,15 +21,22 @@ export interface TestFixture {
 
 /** Cria um escritório e um usuário ADMIN ativo para uso nos testes. */
 export async function createFixtureUser(
-  overrides: Partial<{ role: 'ADMIN' | 'LAWYER' | 'ASSISTANT'; status: 'ACTIVE' | 'INACTIVE' }> = {},
+  overrides: Partial<{
+    role: 'ADMIN' | 'LAWYER' | 'ASSISTANT';
+    status: 'ACTIVE' | 'INACTIVE';
+    /** Cria o usuário em um escritório já existente (para testes com vários usuários no mesmo tenant). */
+    officeId: string;
+  }> = {},
 ): Promise<TestFixture> {
-  const office = await prisma.office.create({
-    data: {
-      name: 'Escritório de Teste',
-      email: `office-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
-      document: `doc-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    },
-  });
+  const office = overrides.officeId
+    ? { id: overrides.officeId }
+    : await prisma.office.create({
+        data: {
+          name: 'Escritório de Teste',
+          email: `office-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+          document: `doc-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        },
+      });
 
   const password = 'Senha@123';
   const passwordHash = await hashPassword(password);

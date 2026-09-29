@@ -12,6 +12,7 @@ export interface PublicUser {
   oabNumber: string | null;
   role: User['role'];
   status: User['status'];
+  mustChangePassword: boolean;
   officeId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -26,6 +27,7 @@ export function toPublicUser(user: User): PublicUser {
     oabNumber: user.oabNumber,
     role: user.role,
     status: user.status,
+    mustChangePassword: user.mustChangePassword,
     officeId: user.officeId,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,

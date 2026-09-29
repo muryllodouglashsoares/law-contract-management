@@ -15,6 +15,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     passwordHash: 'hash',
     role: 'LAWYER',
     status: 'ACTIVE',
+    mustChangePassword: false,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -29,7 +30,7 @@ describe('UserService', () => {
   beforeEach(() => {
     findUnique = vi.fn();
     update = vi.fn();
-    const prismaMock = { user: { findUnique, update } } as unknown as Pick<PrismaClient, 'user'>;
+    const prismaMock = { user: { findUnique, update } } as unknown as ConstructorParameters<typeof UserService>[0];
     userService = new UserService(prismaMock);
   });
 

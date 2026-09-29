@@ -1,6 +1,7 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 
 import { useAuth } from '../contexts/AuthContext';
+import ForcePasswordChange from './ForcePasswordChange';
 
 /**
  * Protege rotas exigindo sessão autenticada. Isso é só conveniência de UX
@@ -8,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
  * de cada recurso continua sendo sempre verificada pelo backend.
  */
 export default function ProtectedRoute() {
-  const { status } = useAuth();
+  const { status, user } = useAuth();
   const location = useLocation();
 
   if (status === 'loading') {
@@ -24,6 +25,11 @@ export default function ProtectedRoute() {
 
   if (status === 'unauthenticated') {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
+
+  // Senha provisória: nenhuma página interna é renderizada até a troca (a rota nem monta).
+  if (user?.mustChangePassword) {
+    return <ForcePasswordChange />;
   }
 
   return <Outlet />;

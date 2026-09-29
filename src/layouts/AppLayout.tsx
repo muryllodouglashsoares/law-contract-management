@@ -3,13 +3,22 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, FileText, BookTemplate, FolderOpen, CreditCard,
   Bell, Clock, Settings, LogOut, Scale, Menu, X, Search,
-  ChevronDown
+  ChevronDown, UserCog
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useApiQuery } from '../hooks/useApiQuery';
+import { ROLE_LABELS } from '../lib/roles';
 import { notificationsService } from '../services/notifications';
 
-const navGroups = [
+interface NavItem {
+  to: string;
+  icon: typeof Users;
+  label: string;
+  /** Só aparece para ADMIN. É conveniência de UX: a autorização real é do backend. */
+  adminOnly?: boolean;
+}
+
+const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: 'Principal',
     items: [
@@ -31,16 +40,11 @@ const navGroups = [
   {
     label: 'Sistema',
     items: [
+      { to: '/usuarios', icon: UserCog, label: 'Usuários', adminOnly: true },
       { to: '/configuracoes', icon: Settings, label: 'Configurações' },
     ],
   },
 ];
-
-const ROLE_LABELS: Record<string, string> = {
-  ADMIN: 'Administrador',
-  LAWYER: 'Advogado(a)',
-  ASSISTANT: 'Assistente',
-};
 
 function initialsOf(name: string): string {
   const parts = name.trim().split(/\s+/);
@@ -110,7 +114,7 @@ export default function AppLayout() {
               <div className="px-2 py-1.5 text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: 'var(--color-muted-foreground)' }}>
                 {group.label}
               </div>
-              {group.items.map((item) => (
+              {group.items.filter((item) => !item.adminOnly || user?.role === 'ADMIN').map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}

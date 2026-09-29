@@ -15,6 +15,7 @@ import PaymentsPage from './pages/PaymentsPage';
 import NotificationsPage from './pages/NotificationsPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
+import UsersPage from './pages/UsersPage';
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
               <Route path="pagamentos" element={<PaymentsPage />} />
               <Route path="notificacoes" element={<NotificationsPage />} />
               <Route path="historico" element={<HistoryPage />} />
+              <Route path="usuarios" element={<UsersPage />} />
               <Route path="configuracoes" element={<SettingsPage />} />
             </Route>
           </Route>

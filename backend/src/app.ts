@@ -1,6 +1,8 @@
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { env } from './config/env';
@@ -24,8 +26,16 @@ import { errorHandler } from './shared/http/error-handler';
  * Separar app.ts de server.ts permite que os testes de integração
  * usem app.inject() diretamente, sem precisar abrir uma porta TCP real.
  */
-export function buildApp(): FastifyInstance {
+export interface BuildAppOptions {
+  /** Sobrescreve o limite de POST /auth/login (usado apenas em testes). Padrão: variáveis de ambiente. */
+  loginRateLimit?: { max: number; timeWindow: string | number };
+}
+
+export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({
+    // A API roda atrás do proxy do Render: sem isso, request.ip seria o IP do
+    // proxy e o rate limit (por IP) valeria para todos os clientes juntos.
+    trustProxy: true,
     logger: {
       level: env.LOG_LEVEL,
       // Nunca logar senha, hash de senha, token JWT ou o header de autorização.
@@ -45,11 +55,33 @@ export function buildApp(): FastifyInstance {
     },
   });
 
-app.register(cors, {
-  origin: env.CORS_ORIGIN,
-  credentials: true,
-  methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
-});
+  // Headers de segurança da API. Registrado antes do CORS e das rotas.
+  app.register(helmet, {
+    // A CSP é aplicada no frontend (public/_headers); a API só devolve JSON e
+    // arquivos para download (nunca HTML/JavaScript executável), então não há
+    // o que uma CSP protegeria aqui.
+    contentSecurityPolicy: false,
+    // O frontend (Cloudflare Pages) está em outro domínio e consome a API e
+    // os downloads via fetch: o padrão `same-origin` bloquearia essas respostas.
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    // HSTS somente em produção (HTTPS); em desenvolvimento local seria nocivo.
+    strictTransportSecurity:
+      env.NODE_ENV === 'production' ? { maxAge: 15552000, includeSubDomains: true } : false,
+  });
+
+  app.register(cors, {
+    origin: env.CORS_ORIGIN,
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE'],
+  });
+
+  // Rate limit: `global: false` — nenhuma rota é limitada por padrão; cada rota
+  // sensível opta por `config.rateLimit` (hoje, somente POST /auth/login).
+  //
+  // O store padrão é em memória: funciona corretamente para uma única instância.
+  // Em múltiplas instâncias/containers será necessário um store compartilhado
+  // (ex.: Redis), caso contrário cada instância terá seu próprio contador.
+  app.register(rateLimit, { global: false });
   app.register(jwt, {
     secret: env.JWT_SECRET,
     sign: { expiresIn: env.JWT_EXPIRES_IN },
@@ -77,7 +109,13 @@ app.register(cors, {
   });
 
   // Módulos -------------------------------------------------------------
-  app.register(authRoutes, { prefix: '/auth' });
+  app.register(authRoutes, {
+    prefix: '/auth',
+    loginRateLimit: options.loginRateLimit ?? {
+      max: env.LOGIN_RATE_LIMIT_MAX,
+      timeWindow: env.LOGIN_RATE_LIMIT_WINDOW,
+    },
+  });
   app.register(userRoutes, { prefix: '/users' });
   app.register(officeRoutes, { prefix: '/offices' });
   app.register(clientRoutes, { prefix: '/clients' });

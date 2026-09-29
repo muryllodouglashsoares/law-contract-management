@@ -1,6 +1,7 @@
 import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import fs from 'node:fs'
 import path from 'node:path'
 
 import siteConfiguration from './.figma/make/site.json'
@@ -21,6 +22,7 @@ export default defineConfig(({ mode }) => {
 react(),
       tailwindcss(),
       figmaSiteConfiguration(siteConfiguration),
+      securityHeadersApiOrigin(),
       figmaErrorOverlayReplay(),
       figmaReactRefreshBoundaryFallback(),
       figmaMakeKitPlugin({ storiesGlob: '/src/**/*.stories.{ts,tsx,js,jsx}' }),
@@ -356,6 +358,40 @@ function figmaMakeKitPlugin(options: { storiesGlob: string | string[] }): Plugin
           next(err as Error)
         }
       })
+    },
+  }
+}
+
+/**
+ * Substitui __API_ORIGIN__ em dist/_headers (CSP `connect-src`) pela origem de
+ * VITE_API_URL. Assim a CSP acompanha a URL da API configurada no build
+ * (Cloudflare Pages) em vez de ter uma URL de produção fixa no repositório.
+ * O mesmo fallback do api-client (http://localhost:3333) é usado se ausente.
+ */
+function securityHeadersApiOrigin(): Plugin {
+  let outDir = 'dist'
+  let apiUrl = ''
+
+  return {
+    name: 'security-headers-api-origin',
+    apply: 'build',
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir)
+      apiUrl = (config.env.VITE_API_URL as string | undefined) || 'http://localhost:3333'
+    },
+    closeBundle() {
+      const headersFile = path.join(outDir, '_headers')
+      if (!fs.existsSync(headersFile)) return
+
+      let origin: string
+      try {
+        origin = new URL(apiUrl).origin
+      } catch {
+        throw new Error(`VITE_API_URL inválida para a CSP: "${apiUrl}"`)
+      }
+
+      const content = fs.readFileSync(headersFile, 'utf8')
+      fs.writeFileSync(headersFile, content.split('__API_ORIGIN__').join(origin))
     },
   }
 }

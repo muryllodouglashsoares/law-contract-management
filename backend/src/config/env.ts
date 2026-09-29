@@ -42,6 +42,15 @@ const envSchema = z.object({
   .default('http://localhost:5173')
   .transform((val) => val.split(',').map((o) => o.trim()).filter(Boolean)),
 
+  // Rate limit de POST /auth/login (por IP). Aceita a janela no formato do
+  // @fastify/rate-limit: número em ms ("60000") ou texto ("1 minute", "30 seconds").
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+  LOGIN_RATE_LIMIT_WINDOW: z
+    .string()
+    .trim()
+    .regex(/^\d+(\s*[a-zA-Z]+)?$/, 'Use um valor como "1 minute", "30 seconds" ou "60000" (ms)')
+    .default('1 minute'),
+
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),

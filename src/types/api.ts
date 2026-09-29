@@ -6,6 +6,7 @@
  */
 
 export type UserRole = 'ADMIN' | 'LAWYER' | 'ASSISTANT';
+export type UserStatus = 'ACTIVE' | 'INACTIVE';
 
 export interface User {
   id: string;
@@ -14,7 +15,9 @@ export interface User {
   phone: string | null;
   oabNumber: string | null;
   role: UserRole;
-  status: 'ACTIVE' | 'INACTIVE';
+  status: UserStatus;
+  /** true enquanto o usuário usa a senha provisória: o app exige a troca antes de liberar o acesso. */
+  mustChangePassword: boolean;
 }
 
 export interface Office {

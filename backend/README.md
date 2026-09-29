@@ -110,11 +110,22 @@ Veja `.env.example` para a lista completa e comentada. Resumo:
 | `JWT_EXPIRES_IN` | não | Validade do token (padrão: `1d`)                        |
 | `CORS_ORIGIN`    | não | Origem do frontend permitida via CORS                   |
 | `LOG_LEVEL`      | não | Nível de log do Pino (padrão: `info`)                    |
+| `LOGIN_RATE_LIMIT_MAX` | não | Máximo de tentativas de `POST /auth/login` por IP na janela (padrão: `5`) |
+| `LOGIN_RATE_LIMIT_WINDOW` | não | Janela do limite acima, ex.: `1 minute`, `30 seconds` ou ms (padrão: `1 minute`) |
 | `STORAGE_DRIVER` | não | `local` (padrão) \| `neon-s3` — ver [Storage de documentos](#storage-de-documentos) |
 | `UPLOADS_DIR`    | não | Pasta do driver `local` (padrão: `./uploads`)           |
 | `MAX_UPLOAD_SIZE_BYTES` | não | Limite de upload por arquivo (padrão: 10 MB)     |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | **sim, se** `neon-s3` | Credenciais do bucket (somente no backend) |
 | `S3_FORCE_PATH_STYLE` | não | Path-style nas URLs S3 (padrão: `true`)             |
+
+### Rate limit do login
+
+`POST /auth/login` é limitado por IP (`@fastify/rate-limit`, `global: false` — nenhuma
+outra rota é afetada). Ao exceder, a API responde `429` com `Retry-After` (segundos) e
+`{ "error": { "code": "RATE_LIMIT_EXCEEDED", "message": "Muitas tentativas de login. Tente novamente em instantes." } }`.
+O Fastify roda com `trustProxy: true` (API atrás do proxy do Render) para que o IP contado
+seja o do cliente. O contador fica **em memória**: correto para uma única instância; com
+múltiplas instâncias/containers será necessário um store compartilhado (ex.: Redis).
 
 Se `DATABASE_URL` ou `JWT_SECRET` estiverem ausentes ou inválidas, a
 aplicação **falha imediatamente ao iniciar**, com uma mensagem clara
@@ -337,8 +348,20 @@ Todas as respostas de erro seguem o formato:
 | GET    | `/auth/me`     | sim (JWT)    | Dados do usuário autenticado                     |
 | GET    | `/users/me`    | sim (JWT)    | Dados do usuário autenticado                     |
 | PATCH  | `/users/me`    | sim (JWT)    | Atualiza `name` do usuário autenticado           |
+| PATCH  | `/users/me/password` | sim (JWT) | Troca a própria senha; limpa `mustChangePassword` |
+| GET    | `/users`       | ADMIN        | Lista usuários do escritório (`search`, `page`, `pageSize`) |
+| POST   | `/users`       | ADMIN        | Cria usuário → `{ user, temporaryPassword }` (senha exibida **uma única vez**) |
+| GET    | `/users/:id`   | ADMIN        | Detalhe (404 se for de outro escritório)        |
+| PATCH  | `/users/:id/role`   | ADMIN   | `{ role }` — não vale para si mesmo nem para o último ADMIN ativo |
+| PATCH  | `/users/:id/status` | ADMIN   | `{ status: ACTIVE\|INACTIVE }` — sem DELETE; não vale para si mesmo nem para o último ADMIN ativo |
 
 Autenticação: header `Authorization: Bearer <accessToken>`.
+
+A cada requisição autenticada o `authenticate` consulta o usuário no banco: usuário
+inexistente, `INACTIVE` ou com `officeId` diferente do token → **401**, e o `role` usado é
+sempre o **atual do banco** (o `role` do JWT não é fonte de verdade). Nas rotas de gestão de
+usuários o `officeId` vem sempre da sessão, e usuário de outro escritório é tratado como 404.
+Usuários criados pelo ADMIN nascem com `mustChangePassword = true` (o frontend exige a troca).
 
 `requireRole('ADMIN', 'LAWYER', ...)` (em `src/shared/auth/require-role.ts`)
 já está pronto para proteger rotas futuras por papel — nenhuma rota atual

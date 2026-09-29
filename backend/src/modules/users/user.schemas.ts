@@ -1,5 +1,18 @@
 import { z } from 'zod';
 
+import { paginationQuerySchema } from '../../shared/http/pagination';
+
+const nameSchema = z.string().trim().min(2, 'Nome deve ter pelo menos 2 caracteres').max(120);
+const phoneSchema = z.string().trim().max(30);
+// Mesma regra de OAB já usada em PATCH /users/me: texto livre de até 40 caracteres.
+const oabNumberSchema = z.string().trim().max(40);
+const userRoleSchema = z.enum(['ADMIN', 'LAWYER', 'ASSISTANT'], {
+  message: "Papel deve ser 'ADMIN', 'LAWYER' ou 'ASSISTANT'",
+});
+const userStatusSchema = z.enum(['ACTIVE', 'INACTIVE'], {
+  message: "Status deve ser 'ACTIVE' ou 'INACTIVE'",
+});
+
 /**
  * Atualização do próprio perfil (PATCH /users/me): nome, telefone e OAB.
  * Alteração de e-mail fica fora de escopo por ora (normalmente exigiria um
@@ -8,9 +21,9 @@ import { z } from 'zod';
  */
 export const updateMeBodySchema = z
   .object({
-    name: z.string().trim().min(2, 'Nome deve ter pelo menos 2 caracteres').max(120).optional(),
-    phone: z.string().trim().max(30).optional(),
-    oabNumber: z.string().trim().max(40).optional(),
+    name: nameSchema.optional(),
+    phone: phoneSchema.optional(),
+    oabNumber: oabNumberSchema.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: 'Informe ao menos um campo para atualizar',
@@ -29,3 +42,38 @@ export const changePasswordBodySchema = z
   });
 
 export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
+
+// ---------------------------------------------------------------------
+// Gestão de usuários pelo ADMIN. Campos controlados pelo backend (officeId,
+// senha, status, mustChangePassword) NÃO fazem parte do body: `.strict()`
+// rejeita qualquer tentativa de enviá-los.
+// ---------------------------------------------------------------------
+
+/** Campo opcional de texto: string vazia (formulário em branco) conta como ausente. */
+const emptyToUndefined = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((value) => (value === '' ? undefined : value), schema.optional());
+
+export const createUserBodySchema = z
+  .object({
+    name: nameSchema,
+    email: z.string().trim().email('E-mail inválido').max(254),
+    role: userRoleSchema,
+    phone: emptyToUndefined(phoneSchema),
+    oabNumber: emptyToUndefined(oabNumberSchema),
+  })
+  .strict();
+export type CreateUserBody = z.infer<typeof createUserBodySchema>;
+
+export const listUsersQuerySchema = paginationQuerySchema.extend({
+  search: z.string().trim().max(200).optional(),
+});
+export type ListUsersQuery = z.infer<typeof listUsersQuerySchema>;
+
+export const userIdParamsSchema = z.object({ id: z.string().uuid('ID de usuário inválido') });
+export type UserIdParams = z.infer<typeof userIdParamsSchema>;
+
+export const updateUserRoleBodySchema = z.object({ role: userRoleSchema }).strict();
+export type UpdateUserRoleBody = z.infer<typeof updateUserRoleBodySchema>;
+
+export const updateUserStatusBodySchema = z.object({ status: userStatusSchema }).strict();
+export type UpdateUserStatusBody = z.infer<typeof updateUserStatusBodySchema>;

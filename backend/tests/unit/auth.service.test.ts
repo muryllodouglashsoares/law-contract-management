@@ -16,6 +16,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     passwordHash: '',
     role: 'ADMIN',
     status: 'ACTIVE',
+    mustChangePassword: false,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

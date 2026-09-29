@@ -29,6 +29,9 @@ export const AUDIT_ACTIONS = {
   DOCUMENT_UPLOADED: 'enviou o documento',
   DOCUMENT_DELETED: 'removeu o documento',
   CONTRACT_PDF_GENERATED: 'gerou o PDF do',
+  USER_CREATED: 'criou o usuário',
+  USER_ROLE_CHANGED: 'alterou o papel de',
+  USER_STATUS_CHANGED: 'alterou o status do usuário',
 } as const;
 
 /**

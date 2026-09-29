@@ -29,6 +29,10 @@ export default defineConfig({
       JWT_EXPIRES_IN: '1h',
       CORS_ORIGIN: 'http://localhost:5173',
       LOG_LEVEL: 'silent',
+      // Alto o bastante para os testes de integração (que fazem muitos logins do mesmo IP)
+      // não esbarrarem no limite; o teste de rate limit usa buildApp({ loginRateLimit }).
+      LOGIN_RATE_LIMIT_MAX: '1000',
+      LOGIN_RATE_LIMIT_WINDOW: '1 minute',
       // Testes sempre usam o driver local (nunca um bucket real); arquivos ficam fora de ./uploads.
       STORAGE_DRIVER: 'local',
       UPLOADS_DIR: './uploads-test',
