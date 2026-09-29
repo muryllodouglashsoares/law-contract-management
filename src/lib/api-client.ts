@@ -126,9 +126,25 @@ export const apiClient = {
     const token = getStoredToken();
     if (token) headers.Authorization = `Bearer ${token}`;
 
-    const response = await fetch(buildUrl(path), { headers });
+    let response: Response;
+    try {
+      response = await fetch(buildUrl(path), { headers });
+    } catch {
+      throw new ApiError(0, 'Não foi possível conectar ao servidor. Verifique sua conexão.');
+    }
+
+    if (response.status === 401) {
+      unauthorizedHandler?.();
+    }
+
     if (!response.ok) {
-      throw new ApiError(response.status, 'Não foi possível baixar o arquivo.');
+      // Preserva status e mensagem reais da API (ex.: 404 "Arquivo não encontrado no armazenamento").
+      const data = await response.json().catch(() => null);
+      throw new ApiError(
+        response.status,
+        data?.error?.message ?? 'Não foi possível baixar o arquivo.',
+        data?.error?.code,
+      );
     }
 
     const disposition = response.headers.get('content-disposition');
