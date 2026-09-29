@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Download, ExternalLink, FileText, Loader2 } from 'lucide-react';
 
+import { ApiError } from '../lib/api-client';
 import { contractsService } from '../services/contracts';
 import { documentsService } from '../services/documents';
 import type { AppDocument } from '../types/api';
@@ -46,6 +47,18 @@ export default function ContractPdfPanel({
   const currentPdf = pdf ?? (generated && generated.versionNumber === versionNumber ? generated : null);
   const currentPdfId = currentPdf?.id ?? null;
 
+  // Se o Document existe mas o arquivo sumiu do storage (404), o backend o regenera a partir
+  // do texto da versão ao receber o pedido de geração (idempotente). Tenta uma única vez.
+  async function withRestore<T>(action: () => Promise<T>): Promise<T> {
+    try {
+      return await action();
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 404 || versionNumber === null) throw error;
+      await contractsService.generatePdf(contractId, versionNumber);
+      return action();
+    }
+  }
+
   // Visualização: baixa o PDF autenticado como Blob e exibe via URL local.
   // Nunca expõe uma URL pública do arquivo.
   useEffect(() => {
@@ -57,8 +70,7 @@ export default function ContractPdfPanel({
     let objectUrl: string | null = null;
     setPreviewLoading(true);
 
-    documentsService
-      .preview(currentPdfId)
+    withRestore(() => documentsService.preview(currentPdfId))
       .then((blob) => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
@@ -100,9 +112,13 @@ export default function ContractPdfPanel({
     if (!currentPdf) return;
     setActionError(null);
     try {
-      await documentsService.download(currentPdf.id, currentPdf.fileName);
-    } catch {
-      setActionError('Não foi possível baixar o PDF. Tente novamente.');
+      await withRestore(() => documentsService.download(currentPdf.id, currentPdf.fileName));
+    } catch (error) {
+      setActionError(
+        error instanceof ApiError && error.status !== 404
+          ? `Não foi possível baixar o PDF: ${error.message}`
+          : 'Não foi possível baixar o PDF. Tente novamente.',
+      );
     }
   }
 
