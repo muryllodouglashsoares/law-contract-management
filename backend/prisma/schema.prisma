@@ -52,6 +52,7 @@ model Office {
   payments          Payment[]
   notifications     Notification[]
   auditLogs         AuditLog[]
+  publicSignatures  ContractPublicSignature[]
 
   @@map("offices")
 }
@@ -79,6 +80,7 @@ model User {
   documentsUploaded    Document[]
   notifications        Notification[]
   auditLogs            AuditLog[]
+  publicSignaturesCreated ContractPublicSignature[]
 
   @@index([officeId])
   @@map("users")
@@ -180,6 +182,16 @@ model Contract {
   value          Decimal        @db.Decimal(12, 2)
   object         String
   startDate      DateTime
+  /// Data de término. Nullable: contratos antigos (e contratos por prazo
+  /// indeterminado) não possuem data de término.
+  endDate        DateTime?
+  /// Controle de idempotência do alerta de renovação (job diário).
+  /// `renewalAlertForEndDate` guarda para QUAL endDate o alerta já foi enviado:
+  /// se o endDate mudar, o valor deixa de coincidir e um novo ciclo de alerta
+  /// passa a ser elegível. A gravação é um UPDATE condicional (ver
+  /// ContractRenewalJobService), então execuções concorrentes não duplicam.
+  renewalAlertSentAt     DateTime?
+  renewalAlertForEndDate DateTime?
   termText       String?
   conditions     String?
   createdAt      DateTime       @default(now())
@@ -192,9 +204,11 @@ model Contract {
   versions    ContractVersion[]
   documents   Document[]
   payments    Payment[]
+  publicSignatures ContractPublicSignature[]
 
   @@index([officeId])
   @@index([officeId, status])
+  @@index([officeId, endDate])
   @@index([clientId])
   @@map("contracts")
 }
@@ -213,10 +227,55 @@ model ContractVersion {
   contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
   author   User     @relation(fields: [authorId], references: [id])
   document Document?
+  publicSignatures ContractPublicSignature[]
 
   @@unique([contractId, versionNumber])
   @@index([contractId])
   @@map("contract_versions")
+}
+
+// ---------------------------------------------------------------------
+// Aceite eletrônico por link público
+// ---------------------------------------------------------------------
+
+/// Link público de uso único para aceite eletrônico SIMPLES de uma versão
+/// específica de um contrato. NÃO é assinatura digital ICP-Brasil.
+///
+/// O token bruto (32 bytes aleatórios, base64url) nunca é persistido: só o
+/// SHA-256 (`tokenHash`). `usedAt` é preenchido por UPDATE condicional
+/// (`WHERE usedAt IS NULL`) dentro da mesma transação que muda o status do
+/// contrato — a garantia de uso único está no banco, não em memória.
+/// O link é atrelado a `contractVersionId`, nunca apenas ao contrato.
+model ContractPublicSignature {
+  id                String    @id @default(uuid())
+  officeId          String
+  contractId        String
+  contractVersionId String
+  createdById       String
+  tokenHash         String    @unique @db.Char(64)
+  expiresAt         DateTime
+  /// Preenchido quando um novo link substitui este (ou quando o link é invalidado).
+  revokedAt         DateTime?
+  usedAt            DateTime?
+  signedAt          DateTime?
+  signerName        String?
+  signerDocument    String?
+  signerIp          String?
+  signerUserAgent   String?
+  consentTextVersion String?
+  /// SHA-256 (hex) de um payload canônico do evento de aceite (sem o token).
+  signatureHash     String?   @db.Char(64)
+  createdAt         DateTime  @default(now())
+
+  office          Office          @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  contract        Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contractVersion ContractVersion @relation(fields: [contractVersionId], references: [id], onDelete: Cascade)
+  createdBy       User            @relation(fields: [createdById], references: [id])
+
+  @@index([contractId])
+  @@index([officeId])
+  @@index([expiresAt])
+  @@map("contract_public_signatures")
 }
 
 // ---------------------------------------------------------------------

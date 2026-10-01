@@ -21,7 +21,15 @@ function formatDateBR(date: Date): string {
 
 export interface ContractTemplateVariablesInput {
   client: { name: string; document: string; email: string; phone: string | null; address: string | null };
-  contract: { object: string; value: number; startDate: Date; termText: string | null; number: number };
+  contract: {
+    object: string;
+    value: number;
+    startDate: Date;
+    /** Opcional para manter compatibilidade com chamadores/contratos antigos. */
+    endDate?: Date | null;
+    termText: string | null;
+    number: number;
+  };
   lawyer: { name: string; email: string; oabNumber: string | null };
   office: { name: string };
 }
@@ -37,6 +45,7 @@ export function buildContractTemplateVariables(input: ContractTemplateVariablesI
     'cliente.endereco': input.client.address ?? '',
     'contrato.valor': formatCurrencyBRL(input.contract.value),
     'contrato.data_inicio': formatDateBR(input.contract.startDate),
+    'contrato.data_fim': input.contract.endDate ? formatDateBR(input.contract.endDate) : '',
     'contrato.prazo': input.contract.termText ?? '',
     'contrato.objeto': input.contract.object,
     'contrato.numero': String(input.contract.number),

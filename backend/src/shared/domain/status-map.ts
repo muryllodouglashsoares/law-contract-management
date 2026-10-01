@@ -61,6 +61,17 @@ export function contractStatusTransitionsFrom(status: ContractStatus): ContractS
   return CONTRACT_STATUS_TRANSITIONS_MAP[status] ?? [];
 }
 
+/**
+ * Status em que um link de aceite eletrônico pode ser gerado E usado.
+ * São exatamente os status com transição válida para ASSINADO em
+ * CONTRACT_STATUS_TRANSITIONS_MAP (PRONTO_ENVIO não vai direto para ASSINADO,
+ * então fica de fora: o contrato precisa ser marcado como enviado antes).
+ */
+export const SIGNABLE_CONTRACT_STATUSES: ContractStatus[] = ['ENVIADO', 'EM_REVISAO'];
+
+/** Status relevantes para o alerta de renovação: contratos vigentes/assinados. */
+export const RENEWAL_ALERT_CONTRACT_STATUSES: ContractStatus[] = ['ATIVO', 'ASSINADO'];
+
 const CLIENT_STATUS_MAP: Record<ClientStatus, string> = {
   ACTIVE: 'ativo',
   INACTIVE: 'inativo',

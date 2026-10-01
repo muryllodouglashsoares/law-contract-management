@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { authenticate } from '../../shared/auth/authenticate';
 import { requireRole } from '../../shared/auth/require-role';
 import { validate } from '../../shared/http/validate';
+import { contractSignatureController } from '../contract-signatures/contract-signature.controller';
 import { contractController } from './contract.controller';
 import {
   contractIdParamsSchema,
@@ -86,5 +87,24 @@ export async function contractRoutes(app: FastifyInstance): Promise<void> {
       ],
     },
     contractController.updateStatus,
+  );
+
+  // Aceite eletrônico por link público de uso único. Gerar o link equivale a "enviar" o contrato
+  // para assinatura — mesmo nível de permissão de mudar o status: ADMIN/LAWYER.
+  app.post<{ Params: ContractIdParams }>(
+    '/:id/signature-links',
+    {
+      preHandler: [authenticate, requireRole('ADMIN', 'LAWYER'), validate({ params: contractIdParamsSchema })],
+    },
+    contractSignatureController.createLink,
+  );
+
+  // Histórico dos links/aceites (inclui IP do signatário) — também restrito a ADMIN/LAWYER.
+  app.get<{ Params: ContractIdParams }>(
+    '/:id/signatures',
+    {
+      preHandler: [authenticate, requireRole('ADMIN', 'LAWYER'), validate({ params: contractIdParamsSchema })],
+    },
+    contractSignatureController.list,
   );
 }

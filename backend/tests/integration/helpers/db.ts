@@ -8,7 +8,7 @@ import { hashPassword } from '../../../src/shared/auth/password';
  */
 export async function resetDatabase(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "audit_logs", "notifications", "payments", "documents", "contract_versions", "contracts", "contract_templates", "clients", "users", "offices" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "audit_logs", "notifications", "payments", "documents", "contract_public_signatures", "contract_versions", "contracts", "contract_templates", "clients", "users", "offices" RESTART IDENTITY CASCADE',
   );
 }
 
@@ -81,4 +81,45 @@ export async function createFixtureClientAndTemplate(
   });
 
   return { clientId: client.id, templateId: template.id };
+}
+
+export interface ContractFixtureOverrides {
+  status?: 'RASCUNHO' | 'PRONTO_ENVIO' | 'ENVIADO' | 'EM_REVISAO' | 'ASSINADO' | 'ATIVO' | 'ENCERRADO' | 'CANCELADO';
+  value?: number;
+  object?: string;
+  startDate?: Date;
+  endDate?: Date | null;
+  clientId?: string;
+  templateId?: string;
+  responsibleId?: string;
+}
+
+/** Cria diretamente no banco um contrato com a versão 1 (sem passar pela API). */
+export async function createFixtureContract(
+  officeId: string,
+  userId: string,
+  overrides: ContractFixtureOverrides = {},
+): Promise<{ id: string; number: number; versionId: string; clientId: string }> {
+  const ids =
+    overrides.clientId && overrides.templateId
+      ? { clientId: overrides.clientId, templateId: overrides.templateId }
+      : await createFixtureClientAndTemplate(officeId);
+
+  const contract = await prisma.contract.create({
+    data: {
+      officeId,
+      clientId: ids.clientId,
+      templateId: ids.templateId,
+      responsibleId: overrides.responsibleId ?? userId,
+      status: overrides.status ?? 'ENVIADO',
+      value: overrides.value ?? 5000,
+      object: overrides.object ?? 'Prestação de serviços jurídicos',
+      startDate: overrides.startDate ?? new Date('2026-01-01T00:00:00Z'),
+      endDate: overrides.endDate === undefined ? null : overrides.endDate,
+    },
+  });
+  const version = await prisma.contractVersion.create({
+    data: { contractId: contract.id, versionNumber: 1, content: 'Texto da versão 1 do contrato.', authorId: userId },
+  });
+  return { id: contract.id, number: contract.number, versionId: version.id, clientId: ids.clientId };
 }

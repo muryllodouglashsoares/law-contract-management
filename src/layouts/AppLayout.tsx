@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, FileText, BookTemplate, FolderOpen, CreditCard,
-  Bell, Clock, Settings, LogOut, Scale, Menu, X, Search,
+  Bell, Clock, Settings, LogOut, Scale, Menu, X,
   ChevronDown, UserCog
 } from 'lucide-react';
+import GlobalSearch from '../components/GlobalSearch';
 import { useAuth } from '../contexts/AuthContext';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { ROLE_LABELS } from '../lib/roles';
@@ -174,15 +175,7 @@ export default function AppLayout() {
             <Menu size={18} className="text-slate-600" />
           </button>
           <div className="flex-1 flex items-center gap-2 max-w-md">
-            <div className="relative flex-1">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="search"
-                placeholder="Buscar clientes, contratos..."
-                className="w-full pl-9 pr-4 py-1.5 text-sm rounded-md border bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 placeholder-slate-400"
-                style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}
-              />
-            </div>
+            <GlobalSearch />
           </div>
           <div className="ml-auto flex items-center gap-2">
             <NavLink to="/notificacoes" className="relative p-2 rounded-md hover:bg-slate-100 text-slate-500">

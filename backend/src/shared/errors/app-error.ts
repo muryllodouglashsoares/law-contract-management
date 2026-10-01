@@ -47,3 +47,14 @@ export class ConflictError extends AppError {
   readonly statusCode = 409;
   readonly code = 'CONFLICT';
 }
+
+/** 410 — recurso existiu mas não está mais disponível (ex.: link de aceite expirado/usado). */
+export class GoneError extends AppError {
+  readonly statusCode = 410;
+  readonly code: string;
+
+  constructor(code: string, message: string, details?: unknown) {
+    super(message, details);
+    this.code = code;
+  }
+}

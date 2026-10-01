@@ -16,3 +16,12 @@
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), accelerometer=(), gyroscope=(), magnetometer=(), interest-cohort=()
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' __API_ORIGIN__; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+
+# Página pública de aceite eletrônico: o token está na URL, então não pode vazar via
+# Referer nem ser indexada. `!` remove o Referrer-Policy herdado de /* antes de redefini-lo
+# (sem isso o Cloudflare concatenaria os dois valores).
+/assinar/*
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+  X-Robots-Tag: noindex, nofollow
+  Cache-Control: no-store

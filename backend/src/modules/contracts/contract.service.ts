@@ -17,17 +17,18 @@ import {
   CONTRACT_STATUS_TO_API,
   contractStatusTransitionsFrom,
 } from '../../shared/domain/status-map';
-import { ConflictError, NotFoundError } from '../../shared/errors';
+import { ConflictError, NotFoundError, ValidationError } from '../../shared/errors';
 import { generateContractPdf } from '../../shared/pdf/contract-pdf';
 import { getStorage, removeQuietly, type StorageDriver } from '../../shared/storage';
 import { keyBelongsToOffice } from '../../shared/storage/storage-key';
 import { sha256Hex } from '../../shared/utils/hash';
 import { paginationSkipTake, toPaginated, type Paginated, type PaginationQuery } from '../../shared/http/pagination';
 import type { ContractWithRelations } from '../../shared/utils/serialize-contract';
-import type {
-  CreateContractBody,
-  ListContractsQuery,
-  UpdateContractBody,
+import {
+  END_BEFORE_START_MESSAGE,
+  type CreateContractBody,
+  type ListContractsQuery,
+  type UpdateContractBody,
 } from './contract.schemas';
 
 const CONTRACT_INCLUDE = {
@@ -39,13 +40,16 @@ const CONTRACT_INCLUDE = {
 
 /** Campos que, ao mudar, exigem gerar uma nova ContractVersion (o texto do
  * contrato depende deles). `conditions` também entra: é anexado ao final
- * do texto renderizado do template. */
+ * do texto renderizado do template. `endDate` também: alimenta a variável
+ * {{contrato.data_fim}} (templates antigos que não a usam não mudam de texto,
+ * mas a nova versão mantém o histórico consistente com os dados do contrato). */
 const CONTENT_AFFECTING_FIELDS = [
   'clientId',
   'templateId',
   'value',
   'object',
   'startDate',
+  'endDate',
   'termText',
   'conditions',
 ] as const;
@@ -71,6 +75,31 @@ export class ContractService {
       officeId,
       ...(query.status ? { status: CONTRACT_STATUS_FROM_API(query.status) } : {}),
       ...(query.clientId ? { clientId: query.clientId } : {}),
+      ...(query.startDateFrom || query.startDateTo
+        ? {
+            startDate: {
+              ...(query.startDateFrom ? { gte: query.startDateFrom } : {}),
+              ...(query.startDateTo ? { lte: query.startDateTo } : {}),
+            },
+          }
+        : {}),
+      // Contratos sem endDate nunca casam com um filtro de período de término.
+      ...(query.endDateFrom || query.endDateTo
+        ? {
+            endDate: {
+              ...(query.endDateFrom ? { gte: query.endDateFrom } : {}),
+              ...(query.endDateTo ? { lte: query.endDateTo } : {}),
+            },
+          }
+        : {}),
+      ...(query.valueMin !== undefined || query.valueMax !== undefined
+        ? {
+            value: {
+              ...(query.valueMin !== undefined ? { gte: query.valueMin } : {}),
+              ...(query.valueMax !== undefined ? { lte: query.valueMax } : {}),
+            },
+          }
+        : {}),
       ...(query.search
         ? {
             OR: [
@@ -137,6 +166,7 @@ export class ContractService {
           value: data.value,
           object: data.object,
           startDate: data.startDate,
+          endDate: data.endDate,
           termText: data.termText,
           conditions: data.conditions,
         },
@@ -169,6 +199,16 @@ export class ContractService {
       throw new ConflictError('Só é possível editar um contrato enquanto ele está em rascunho');
     }
 
+    // Regra de negócio no backend (nunca só no frontend): término >= início, considerando
+    // o valor persistido quando apenas um dos dois campos é enviado.
+    const effectiveStart = data.startDate ?? existing.startDate;
+    const effectiveEnd = data.endDate === undefined ? existing.endDate : data.endDate;
+    if (effectiveEnd && effectiveEnd.getTime() < effectiveStart.getTime()) {
+      throw new ValidationError('Dados inválidos no corpo da requisição', [
+        { path: 'endDate', message: END_BEFORE_START_MESSAGE },
+      ]);
+    }
+
     const [client, template] = await Promise.all([
       data.clientId ? this.getClientOrThrow(actor.officeId, data.clientId) : Promise.resolve(null),
       data.templateId ? this.getTemplateOrThrow(actor.officeId, data.templateId) : Promise.resolve(null),
@@ -185,6 +225,7 @@ export class ContractService {
           ...(data.value !== undefined ? { value: data.value } : {}),
           ...(data.object !== undefined ? { object: data.object } : {}),
           ...(data.startDate !== undefined ? { startDate: data.startDate } : {}),
+          ...(data.endDate !== undefined ? { endDate: data.endDate } : {}),
           ...(data.termText !== undefined ? { termText: data.termText } : {}),
           ...(data.conditions !== undefined ? { conditions: data.conditions } : {}),
         },
@@ -420,7 +461,7 @@ export class ContractService {
   private renderContractContent(
     template: Pick<ContractTemplate, 'content'>,
     client: Pick<Client, 'name' | 'document' | 'email' | 'phone' | 'address'>,
-    contract: Pick<Contract, 'value' | 'startDate' | 'termText' | 'object' | 'number' | 'conditions'>,
+    contract: Pick<Contract, 'value' | 'startDate' | 'endDate' | 'termText' | 'object' | 'number' | 'conditions'>,
     lawyer: Pick<User, 'name' | 'email' | 'oabNumber'>,
     office: { name: string },
   ): string {
@@ -436,6 +477,7 @@ export class ContractService {
         object: contract.object,
         value: typeof contract.value === 'number' ? contract.value : Number(contract.value),
         startDate: contract.startDate,
+        endDate: contract.endDate,
         termText: contract.termText,
         number: contract.number,
       },

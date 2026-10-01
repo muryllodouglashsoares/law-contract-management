@@ -54,6 +54,8 @@ interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   query?: QueryParams;
+  /** false = rota pública: não envia o JWT e um 401 NÃO dispara o logout automático. */
+  auth?: boolean;
 }
 
 function buildUrl(path: string, query?: QueryParams): string {
@@ -70,7 +72,8 @@ function buildUrl(path: string, query?: QueryParams): string {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {};
-  const token = getStoredToken();
+  const useAuth = options.auth !== false;
+  const token = useAuth ? getStoredToken() : null;
   if (token) headers.Authorization = `Bearer ${token}`;
 
   let body: BodyInit | undefined;
@@ -92,7 +95,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new ApiError(0, 'Não foi possível conectar ao servidor. Verifique sua conexão.');
   }
 
-  if (response.status === 401) {
+  if (response.status === 401 && useAuth) {
     unauthorizedHandler?.();
   }
 
@@ -116,6 +119,12 @@ export const apiClient = {
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+
+  /** Rotas públicas (sem JWT), ex.: página de aceite eletrônico por link. */
+  anonymous: {
+    get: <T>(path: string) => request<T>(path, { method: 'GET', auth: false }),
+    post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body, auth: false }),
+  },
 
   /** Upload multipart (ex.: envio de documento). */
   upload: <T>(path: string, formData: FormData) => request<T>(path, { method: 'POST', body: formData }),

@@ -16,6 +16,7 @@ import NotificationsPage from './pages/NotificationsPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import UsersPage from './pages/UsersPage';
+import PublicSignaturePage from './pages/PublicSignaturePage';
 
 export default function App() {
   return (
@@ -23,6 +24,9 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          {/* Pública: aceite eletrônico por link de uso único. FORA do ProtectedRoute de propósito;
+              a validade do token é decidida só pelo backend. */}
+          <Route path="/assinar/:token" element={<PublicSignaturePage />} />
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<AppLayout />}>
               <Route index element={<Navigate to="/dashboard" replace />} />

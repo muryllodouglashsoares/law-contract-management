@@ -7,3 +7,4 @@ coverage
 .git
 *.log
 tests
+!.env.example

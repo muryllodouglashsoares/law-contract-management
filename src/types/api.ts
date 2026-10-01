@@ -80,6 +80,8 @@ export interface Contract {
   value: number;
   object: string;
   startDate: string;
+  /** Data de término; null em contratos antigos / prazo indeterminado. */
+  endDate: string | null;
   termText: string | null;
   conditions: string | null;
   createdAt: string;
@@ -165,4 +167,63 @@ export interface DashboardSummary {
   recentContracts: Contract[];
   recentActivity: AuditLogEntry[];
   upcomingPayments: Payment[];
+}
+
+// --- Busca global ------------------------------------------------------
+
+export interface GlobalSearchResults {
+  clients: { id: string; label: string; description: string | null }[];
+  contracts: { id: string; number: number; label: string; description: string; clientName: string }[];
+  templates: { id: string; label: string; description: string | null }[];
+  documents: { id: string; label: string; description: string; contractId: string }[];
+  users: { id: string; label: string; description: string }[];
+}
+
+// --- Aceite eletrônico (assinatura eletrônica simples) -------------------
+
+export interface SignatureLink {
+  url: string;
+  expiresAt: string;
+  singleUse: true;
+  versionNumber: number;
+}
+
+export type SignatureLinkState = 'active' | 'used' | 'expired' | 'revoked';
+
+export interface ContractSignatureRecord {
+  id: string;
+  state: SignatureLinkState;
+  versionNumber: number;
+  createdAt: string;
+  expiresAt: string;
+  signedAt: string | null;
+  signerName: string | null;
+  signerDocumentMasked: string | null;
+  signerIp: string | null;
+  signatureHash: string | null;
+}
+
+export interface PublicSignatureView {
+  officeName: string;
+  contract: {
+    number: number;
+    object: string;
+    value: number;
+    startDate: string;
+    endDate: string | null;
+    clientName: string;
+  };
+  version: { versionNumber: number; content: string; createdAt: string };
+  expiresAt: string;
+  singleUse: true;
+  consent: { text: string; version: string };
+}
+
+export interface PublicSignatureResult {
+  signed: true;
+  signedAt: string;
+  signatureId: string;
+  signatureHash: string;
+  signerName: string;
+  contractNumber: number;
 }

@@ -23,7 +23,7 @@ export default function NewContractPage() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [clientSearch, setClientSearch] = useState('');
-  const [formData, setFormData] = useState({ value: '', object: '', startDate: '', deadline: '', conditions: '' });
+  const [formData, setFormData] = useState({ value: '', object: '', startDate: '', endDate: '', deadline: '', conditions: '' });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [created, setCreated] = useState<Contract | null>(null);
@@ -46,7 +46,11 @@ export default function NewContractPage() {
   const canProceed = () => {
     if (step === 1) return selectedClient !== null;
     if (step === 2) return selectedTemplate !== null;
-    if (step === 3) return formData.value && formData.object && formData.startDate;
+    // Término é opcional, mas quando informado não pode ser anterior ao início (o backend revalida).
+    if (step === 3) {
+      const endOk = !formData.endDate || !formData.startDate || formData.endDate >= formData.startDate;
+      return formData.value && formData.object && formData.startDate && endOk;
+    }
     return true;
   };
 
@@ -61,6 +65,7 @@ export default function NewContractPage() {
         value: Number(formData.value.replace(/\./g, '').replace(',', '.')) || Number(formData.value),
         object: formData.object,
         startDate: formData.startDate,
+        endDate: formData.endDate || undefined,
         termText: formData.deadline || undefined,
         conditions: formData.conditions || undefined,
       });
@@ -208,6 +213,13 @@ export default function NewContractPage() {
                 <input type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} />
               </div>
               <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1.5">Data de término (opcional)</label>
+                <input type="date" min={formData.startDate || undefined} value={formData.endDate} onChange={e => setFormData({...formData, endDate: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: formData.endDate && formData.startDate && formData.endDate < formData.startDate ? '#DC2626' : 'var(--color-border)' }} />
+                {formData.endDate && formData.startDate && formData.endDate < formData.startDate && (
+                  <p className="text-xs mt-1" style={{ color: '#DC2626' }}>A data de término não pode ser anterior à data de início.</p>
+                )}
+              </div>
+              <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1.5">Prazo / Duração</label>
                 <input value={formData.deadline} onChange={e => setFormData({...formData, deadline: e.target.value})} placeholder="Ex: 12 meses" className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} />
               </div>
@@ -235,6 +247,7 @@ export default function NewContractPage() {
                 <div className="mt-2"><span className="text-slate-400">OBJETO:</span> <span className="text-blue-700 font-medium">{formData.object || '{{contrato.objeto}}'}</span></div>
                 <div><span className="text-slate-400">VALOR:</span> <span className="text-blue-700 font-medium">{formData.value ? `R$ ${formData.value}` : '{{contrato.valor}}'}</span></div>
                 <div><span className="text-slate-400">INÍCIO:</span> <span className="text-blue-700 font-medium">{formData.startDate ? new Date(formData.startDate + 'T00:00:00').toLocaleDateString('pt-BR') : '{{contrato.data_inicio}}'}</span></div>
+                <div><span className="text-slate-400">TÉRMINO:</span> <span className="text-blue-700 font-medium">{formData.endDate ? new Date(formData.endDate + 'T00:00:00').toLocaleDateString('pt-BR') : '{{contrato.data_fim}}'}</span></div>
                 <div><span className="text-slate-400">PRAZO:</span> <span className="text-blue-700 font-medium">{formData.deadline || '{{contrato.prazo}}'}</span></div>
                 <div className="mt-4 text-slate-400">ADVOGADO RESPONSÁVEL:</div>
                 <div><span className="text-slate-400">NOME:</span> <span className="text-blue-700 font-medium">{user?.name}</span></div>

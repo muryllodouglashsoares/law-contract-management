@@ -9,16 +9,21 @@ import { env } from './config/env';
 import { auditRoutes } from './modules/audit/audit.routes';
 import { authRoutes } from './modules/auth/auth.routes';
 import { clientRoutes } from './modules/clients/client.routes';
+import { ContractRenewalJobService } from './modules/contract-renewal/contract-renewal-job.service';
+import { publicSignatureRoutes } from './modules/contract-signatures/public-signature.routes';
 import { contractTemplateRoutes } from './modules/contract-templates/contract-template.routes';
 import { contractRoutes } from './modules/contracts/contract.routes';
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes';
 import { documentRoutes } from './modules/documents/document.routes';
+import { internalJobsRoutes, type RenewalJobRunner } from './modules/internal-jobs/internal-jobs.routes';
 import { notificationRoutes } from './modules/notifications/notification.routes';
 import { officeRoutes } from './modules/offices/office.routes';
 import { paymentRoutes } from './modules/payments/payment.routes';
+import { searchRoutes } from './modules/search/search.routes';
 import { userRoutes } from './modules/users/user.routes';
 import { prisma } from './shared/database/prisma';
 import { errorHandler } from './shared/http/error-handler';
+import { redactSignatureTokenInUrl } from './shared/security/token';
 
 /**
  * Monta e configura a instância do Fastify, sem chamar listen().
@@ -29,6 +34,12 @@ import { errorHandler } from './shared/http/error-handler';
 export interface BuildAppOptions {
   /** Sobrescreve o limite de POST /auth/login (usado apenas em testes). Padrão: variáveis de ambiente. */
   loginRateLimit?: { max: number; timeWindow: string | number };
+  /** Sobrescreve o rate limit dos endpoints públicos de aceite (usado apenas em testes). */
+  publicSignatureRateLimit?: { max: number; timeWindow: string | number };
+  /** Sobrescreve o CRON_SECRET (usado apenas em testes). `undefined` mantém o valor do ambiente. */
+  cronSecret?: string;
+  /** Substitui o job de renovação (usado em testes unitários sem banco). */
+  renewalJob?: RenewalJobRunner;
 }
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
@@ -48,6 +59,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
           'res.headers["set-cookie"]',
         ],
         censor: '[REDACTED]',
+      },
+      // O token do aceite eletrônico viaja no caminho da URL (/public/signatures/<token>):
+      // o redact do pino não mascara trechos de string, então o serializer de `req` troca o
+      // token por [REDACTED] antes de qualquer linha de log (incoming request/completed/erro).
+      serializers: {
+        req(request: { method?: string; url?: string; headers?: Record<string, unknown>; ip?: string }) {
+          return {
+            method: request.method,
+            url: request.url ? redactSignatureTokenInUrl(request.url) : request.url,
+            host: request.headers?.host,
+            remoteAddress: request.ip,
+          };
+        },
       },
       ...(env.NODE_ENV === 'development'
         ? { transport: { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss', ignore: 'pid,hostname' } } }
@@ -126,6 +150,23 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.register(notificationRoutes, { prefix: '/notifications' });
   app.register(auditRoutes, { prefix: '/audit' });
   app.register(dashboardRoutes, { prefix: '/dashboard' });
+  app.register(searchRoutes, { prefix: '/search' });
+
+  // Aceite eletrônico por link público (SEM JWT; o token é a credencial; rate limit próprio).
+  app.register(publicSignatureRoutes, {
+    prefix: '/public',
+    rateLimit: options.publicSignatureRateLimit ?? {
+      max: env.PUBLIC_SIGNATURE_RATE_LIMIT_MAX,
+      timeWindow: env.PUBLIC_SIGNATURE_RATE_LIMIT_WINDOW,
+    },
+  });
+
+  // Jobs internos (GitHub Actions). Protegidos por CRON_SECRET, não pelo JWT de usuário.
+  app.register(internalJobsRoutes, {
+    prefix: '/internal',
+    cronSecret: options.cronSecret ?? env.CRON_SECRET,
+    renewalJob: options.renewalJob ?? new ContractRenewalJobService(prisma),
+  });
 
   return app;
 }

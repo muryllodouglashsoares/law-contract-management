@@ -5,8 +5,11 @@ import {
   Clock, AlertCircle, Upload, Paperclip
 } from 'lucide-react';
 import ContractPdfPanel from '../components/ContractPdfPanel';
+import ContractSignaturePanel from '../components/ContractSignaturePanel';
 import StatusBadge from '../components/StatusBadge';
 import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
+import { RENEWAL_TONE_STYLES, formatDateOnly, renewalIndicator } from '../lib/contract-dates';
+import { useAuth } from '../contexts/AuthContext';
 import { contractsService } from '../services/contracts';
 import { paymentsService } from '../services/payments';
 import { auditService } from '../services/audit';
@@ -46,6 +49,8 @@ const DOC_CATEGORIES: DocumentCategoryApi[] = ['contrato', 'procuração', 'docu
 export default function ContractDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canManageContract = user?.role === 'ADMIN' || user?.role === 'LAWYER';
   const [activeTab, setActiveTab] = useState('resumo');
 
   const { data: contractData, loading: loadingContract, error: contractError, refetch: refetchContract } = useApiQuery(
@@ -104,7 +109,7 @@ export default function ContractDetailPage() {
 
   // --- Edit contract (só em rascunho) ---------------------------------
   const [showEdit, setShowEdit] = useState(false);
-  const [editForm, setEditForm] = useState({ value: '', object: '', startDate: '', deadline: '', conditions: '' });
+  const [editForm, setEditForm] = useState({ value: '', object: '', startDate: '', endDate: '', deadline: '', conditions: '' });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -114,6 +119,7 @@ export default function ContractDetailPage() {
       value: String(contract.value),
       object: contract.object,
       startDate: contract.startDate.slice(0, 10),
+      endDate: contract.endDate ? contract.endDate.slice(0, 10) : '',
       deadline: contract.termText ?? '',
       conditions: contract.conditions ?? '',
     });
@@ -129,6 +135,8 @@ export default function ContractDetailPage() {
         value: Number(editForm.value),
         object: editForm.object,
         startDate: editForm.startDate,
+        // vazio remove a data de término (null); o backend valida término >= início.
+        endDate: editForm.endDate || null,
         termText: editForm.deadline || undefined,
         conditions: editForm.conditions || undefined,
       });
@@ -276,16 +284,25 @@ export default function ContractDetailPage() {
         )}
 
         {/* Key metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5 pt-5 border-t" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-5 pt-5 border-t" style={{ borderColor: 'var(--color-border)' }}>
           {[
             { label: 'Valor', value: contract.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) },
-            { label: 'Início', value: new Date(contract.startDate).toLocaleDateString('pt-BR') },
+            { label: 'Início', value: formatDateOnly(contract.startDate) },
+            { label: 'Término', value: contract.endDate ? formatDateOnly(contract.endDate) : '—' },
             { label: 'Última atualização', value: new Date(contract.updatedAt).toLocaleDateString('pt-BR') },
             { label: 'Responsável', value: contract.responsible.name },
           ].map(m => (
             <div key={m.label}>
               <div className="text-xs text-slate-400 mb-0.5">{m.label}</div>
               <div className="text-sm font-semibold text-slate-800 tabular-nums" style={{ fontFamily: m.label === 'Valor' ? 'var(--font-mono)' : undefined }}>{m.value}</div>
+              {m.label === 'Término' && (() => {
+                const indicator = renewalIndicator(contract);
+                return indicator ? (
+                  <span className="inline-block mt-1 text-xs font-semibold px-1.5 py-0.5 rounded" style={RENEWAL_TONE_STYLES[indicator.tone]}>
+                    {indicator.label}
+                  </span>
+                ) : null;
+              })()}
             </div>
           ))}
         </div>
@@ -348,6 +365,12 @@ export default function ContractDetailPage() {
                       <span className="text-sm font-medium text-slate-700">Enviar para assinatura</span>
                     </button>
                   )}
+                  {canManageContract && (contract.status === 'enviado' || contract.status === 'em_revisao') && (
+                    <button onClick={() => setActiveTab('documento')} className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left" style={{ borderColor: 'var(--color-border)' }}>
+                      <Send size={15} style={{ color: '#7C3AED' }} />
+                      <span className="text-sm font-medium text-slate-700">Gerar link de aceite eletrônico</span>
+                    </button>
+                  )}
                   <button onClick={() => setShowNewPayment(true)} className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left" style={{ borderColor: 'var(--color-border)' }}>
                     <CreditCard size={15} style={{ color: '#059669' }} />
                     <span className="text-sm font-medium text-slate-700">Registrar parcela / pagamento</span>
@@ -371,6 +394,8 @@ export default function ContractDetailPage() {
                 pdf={currentPdf}
                 onGenerated={refetchDocuments}
               />
+
+              <ContractSignaturePanel contractId={contract.id} contractStatus={contract.status} />
 
               <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--color-border)' }}>
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -524,6 +549,10 @@ export default function ContractDetailPage() {
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1.5">Data de início *</label>
                   <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">Data de término (opcional)</label>
+                  <input type="date" min={editForm.startDate || undefined} value={editForm.endDate} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }} />
                 </div>
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-slate-700 mb-1.5">Prazo / Duração</label>

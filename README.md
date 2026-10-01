@@ -18,6 +18,9 @@ Todos os itens abaixo existem no código atual (rotas, services e páginas corre
 - **Clientes** (pessoa física ou jurídica): cadastro, edição, busca e inativação/remoção.
 - **Modelos de contrato**, com variáveis (`{{grupo.campo}}`) substituídas automaticamente na geração do texto.
 - **Contratos**: criação a partir de um modelo, edição em rascunho com versionamento automático do conteúdo, e transições de status controladas (`RASCUNHO → ... → ATIVO/ENCERRADO/CANCELADO`).
+- **Término e renovação**: `endDate` opcional no contrato, indicador de vencimento próximo e alerta automático (30 dias) via `Notification`, disparado por um cron diário no GitHub Actions.
+- **Busca global** no topo do sistema (clientes, contratos, modelos, documentos e usuários) e **filtros avançados** em contratos (período de início/término, faixa de valor, cliente, status).
+- **Aceite eletrônico** por link público de uso único (assinatura eletrônica simples, **não** ICP-Brasil), com token com hash, expiração, IP/data registrados pelo backend e vínculo com a versão exata do contrato.
 - **Documentos**: upload, categorização e download de arquivos vinculados a um contrato.
 - **Pagamentos**: parcelas por contrato, registro de recebimento e indicadores (pago, pendente, atrasado, a receber nos próximos 30 dias).
 - **Notificações** por usuário, geradas automaticamente em eventos-chave do contrato (enviado, assinado, ativo).
@@ -74,6 +77,7 @@ Mecanismos existentes e verificáveis no código:
 - **Validação com Zod** em body/params/querystring de toda rota que recebe entrada do cliente.
 - **CORS** restrito à(s) origem(ns) configurada(s) em `CORS_ORIGIN`.
 - **Isolamento multi-tenant por `officeId`**: toda query de leitura/escrita nos services filtra pelo escritório do usuário autenticado (`request.user.officeId`), nunca por um id vindo livremente do cliente.
+- **Endpoints públicos de aceite** protegidos por token aleatório (SHA-256 no banco), expiração, uso único transacional e rate limit próprio; o job interno de renovação usa `CRON_SECRET`, não o JWT.
 - **Redação de dados sensíveis nos logs**: o logger (Pino) tem `redact` configurado para nunca logar o header `Authorization`, cookies, senha ou hash de senha (`backend/src/app.ts`).
 
 Este projeto **não** alega conformidade com LGPD ou qualquer certificação de segurança — os itens acima são os mecanismos efetivamente implementados, não uma auditoria de compliance.
@@ -137,6 +141,8 @@ O GitHub Actions (`.github/workflows/ci.yml`) roda em todo `push` para `main` e 
 - **frontend**: `npm ci` + `npm run build`.
 - **backend**: `npm ci`, checagem de tipos (`npm run typecheck`), aplicação das migrations e execução dos testes (unitários + integração, com um PostgreSQL de serviço no próprio runner), e `npm run build`.
 - **docker**: garante que as imagens Docker do frontend e do backend continuam buildáveis (`docker build`), rodando somente depois que os dois jobs acima passam.
+
+Além do CI, `.github/workflows/contract-renewal-alerts.yml` é um cron diário (e `workflow_dispatch`) que chama o endpoint interno de alertas de renovação — configuração em [`backend/README.md`](backend/README.md#cron-diário-alertas-de-renovação).
 
 Não há deploy automático nesta etapa — o CI valida o código, não o publica em nenhum ambiente.
 

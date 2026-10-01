@@ -42,6 +42,10 @@ services:
       S3_BUCKET: ${S3_BUCKET:-}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      # Cron diário (GitHub Actions) e aceite eletrônico por link público. Todos opcionais em dev.
+      CRON_SECRET: ${CRON_SECRET:-}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:5173}
+      PUBLIC_SIGNATURE_EXPIRATION_HOURS: ${PUBLIC_SIGNATURE_EXPIRATION_HOURS:-72}
     ports:
       - '3333:3333'
     command: sh -c "npx prisma migrate deploy && node dist/server.js"

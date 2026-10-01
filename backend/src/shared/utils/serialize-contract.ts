@@ -17,6 +17,7 @@ export interface PublicContract {
   value: number;
   object: string;
   startDate: string;
+  endDate: string | null;
   termText: string | null;
   conditions: string | null;
   createdAt: string;
@@ -37,6 +38,7 @@ export function toPublicContract(contract: ContractWithRelations): PublicContrac
     value: toMoneyNumber(contract.value),
     object: contract.object,
     startDate: contract.startDate.toISOString(),
+    endDate: contract.endDate ? contract.endDate.toISOString() : null,
     termText: contract.termText,
     conditions: contract.conditions,
     createdAt: contract.createdAt.toISOString(),

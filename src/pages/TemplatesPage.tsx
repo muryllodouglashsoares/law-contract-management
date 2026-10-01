@@ -7,7 +7,7 @@ import type { ContractTemplate } from '../types/api';
 
 const variablesPanel = {
   'Cliente': ['{{cliente.nome}}', '{{cliente.cpf}}', '{{cliente.email}}', '{{cliente.telefone}}', '{{cliente.endereco}}'],
-  'Contrato': ['{{contrato.valor}}', '{{contrato.data_inicio}}', '{{contrato.prazo}}', '{{contrato.objeto}}', '{{contrato.numero}}'],
+  'Contrato': ['{{contrato.valor}}', '{{contrato.data_inicio}}', '{{contrato.data_fim}}', '{{contrato.prazo}}', '{{contrato.objeto}}', '{{contrato.numero}}'],
   'Advogado': ['{{advogado.nome}}', '{{advogado.oab}}', '{{advogado.email}}', '{{advogado.escritorio}}'],
 };
 

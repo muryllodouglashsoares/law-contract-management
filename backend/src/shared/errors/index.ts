@@ -5,4 +5,5 @@ export {
   AuthorizationError,
   NotFoundError,
   ConflictError,
+  GoneError,
 } from './app-error';

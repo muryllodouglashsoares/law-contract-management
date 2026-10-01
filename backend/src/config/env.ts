@@ -77,6 +77,32 @@ const envSchema = z.object({
     .default('true')
     .transform((value) => value === 'true'),
 
+  // Segredo do job interno (POST /internal/jobs/*), chamado pelo GitHub Actions.
+  // Opcional: sem ele o endpoint fica DESABILITADO (404). Gere com:
+  //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  CRON_SECRET: optionalString.refine((value) => value === undefined || value.length >= 32, {
+    message: 'CRON_SECRET deve ter pelo menos 32 caracteres',
+  }),
+
+  // Origem pública do frontend, usada para montar o link de aceite eletrônico
+  // (`<PUBLIC_APP_URL>/assinar/<token>`). Nunca é derivada do header Host.
+  PUBLIC_APP_URL: optionalString
+    .refine((value) => value === undefined || /^https?:\/\/[^\s/]+(:\d+)?$/.test(value.replace(/\/+$/, '')), {
+      message: 'PUBLIC_APP_URL deve ser uma origem http(s), ex.: https://app.exemplo.com',
+    })
+    .transform((value) => (value ? value.replace(/\/+$/, '') : undefined)),
+
+  // Validade do link de aceite eletrônico, em horas (padrão: 72h = 3 dias).
+  PUBLIC_SIGNATURE_EXPIRATION_HOURS: z.coerce.number().int().positive().max(24 * 90).default(72),
+
+  // Rate limit (por IP) dos endpoints públicos de aceite: GET e POST do link.
+  PUBLIC_SIGNATURE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  PUBLIC_SIGNATURE_RATE_LIMIT_WINDOW: z
+    .string()
+    .trim()
+    .regex(/^\d+(\s*[a-zA-Z]+)?$/, 'Use um valor como "1 minute", "30 seconds" ou "60000" (ms)')
+    .default('1 minute'),
+
   // Tamanho máximo de upload de um documento, em bytes. Mantido alinhado
   // com o texto já exibido na tela de Documentos ("Máx. 10 MB por arquivo").
   MAX_UPLOAD_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
@@ -113,6 +139,11 @@ function loadEnv(): Env {
 }
 
 export const env = loadEnv();
+
+if (env.NODE_ENV === 'production' && !env.PUBLIC_APP_URL) {
+  // eslint-disable-next-line no-console
+  console.warn('⚠️  PUBLIC_APP_URL não definida: a geração de links de aceite eletrônico ficará indisponível.');
+}
 
 if (env.NODE_ENV === 'production' && env.STORAGE_DRIVER === 'local') {
   // eslint-disable-next-line no-console

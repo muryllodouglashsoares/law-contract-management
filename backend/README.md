@@ -99,7 +99,7 @@ documentados abaixo.
 
 ## Variáveis de ambiente
 
-Veja `.env.example` para a lista completa e comentada. Resumo:
+Veja `backend/.env.example` (versionado; o `.gitignore` tem a exceção `!.env.example`) para a lista completa e comentada. Resumo:
 
 | Variável         | Obrigatória | Descrição                                             |
 | ---------------- | :---------: | ------------------------------------------------------ |
@@ -112,6 +112,10 @@ Veja `.env.example` para a lista completa e comentada. Resumo:
 | `LOG_LEVEL`      | não | Nível de log do Pino (padrão: `info`)                    |
 | `LOGIN_RATE_LIMIT_MAX` | não | Máximo de tentativas de `POST /auth/login` por IP na janela (padrão: `5`) |
 | `LOGIN_RATE_LIMIT_WINDOW` | não | Janela do limite acima, ex.: `1 minute`, `30 seconds` ou ms (padrão: `1 minute`) |
+| `CRON_SECRET` | não (obrigatória p/ o job) | Segredo (≥ 32 chars) do `POST /internal/jobs/*`. Sem ela o endpoint fica desabilitado (404). Veja [Cron diário](#cron-diário-alertas-de-renovação) |
+| `PUBLIC_APP_URL` | **sim, para gerar links de aceite** | Origem pública do frontend (ex.: `https://app.exemplo.com`), usada em `<PUBLIC_APP_URL>/assinar/<token>`. Nunca derivada do header `Host` |
+| `PUBLIC_SIGNATURE_EXPIRATION_HOURS` | não | Validade do link de aceite em horas (padrão: `72`) |
+| `PUBLIC_SIGNATURE_RATE_LIMIT_MAX` / `PUBLIC_SIGNATURE_RATE_LIMIT_WINDOW` | não | Rate limit por IP do `GET` público (padrão: `30` / `1 minute`); o `POST .../sign` usa 1/3 desse valor (mín. 3) |
 | `STORAGE_DRIVER` | não | `local` (padrão) \| `neon-s3` — ver [Storage de documentos](#storage-de-documentos) |
 | `UPLOADS_DIR`    | não | Pasta do driver `local` (padrão: `./uploads`)           |
 | `MAX_UPLOAD_SIZE_BYTES` | não | Limite de upload por arquivo (padrão: 10 MB)     |
@@ -362,6 +366,78 @@ inexistente, `INACTIVE` ou com `officeId` diferente do token → **401**, e o `r
 sempre o **atual do banco** (o `role` do JWT não é fonte de verdade). Nas rotas de gestão de
 usuários o `officeId` vem sempre da sessão, e usuário de outro escritório é tratado como 404.
 Usuários criados pelo ADMIN nascem com `mustChangePassword = true` (o frontend exige a troca).
+
+### Contratos, busca, aceite eletrônico e jobs
+
+| Método | Rota | Autenticação | Descrição |
+| ------ | ---- | :----------: | --------- |
+| GET    | `/contracts` | sim | Além de `search`/`status`/`clientId`/paginação: `startDateFrom`, `startDateTo`, `endDateFrom`, `endDateTo`, `valueMin`, `valueMax` (todos combináveis; inclusivos; `valueMin > valueMax`, datas inválidas ou períodos invertidos → 400) |
+| POST/PATCH | `/contracts`, `/contracts/:id` | sim | Aceitam `endDate` (opcional; `null` no PATCH remove). `endDate < startDate` → 400 |
+| GET    | `/search/global?q=&limit=` | sim | Busca global por escritório (clientes, contratos, modelos, documentos; usuários só para ADMIN). `q` ≥ 2 caracteres; `limit` por categoria (padrão 5, máx. 10) |
+| POST   | `/contracts/:id/signature-links` | ADMIN, LAWYER | Gera link de aceite de uso único → `{ url, expiresAt, singleUse, versionNumber }` (o link só aparece nesta resposta) |
+| GET    | `/contracts/:id/signatures` | ADMIN, LAWYER | Histórico de links/aceites (sem token; documento mascarado) |
+| GET    | `/public/signatures/:token` | token | Dados mínimos do contrato/versão a aceitar |
+| POST   | `/public/signatures/:token/sign` | token | `{ signerName, signerDocument, consent: true }` → registra o aceite |
+| POST   | `/internal/jobs/contract-renewal-alerts` | `CRON_SECRET` | Executa o job de renovação → `{ status, processed, notified, skipped }` |
+
+## Término do contrato e alerta de renovação
+
+- `Contract.endDate` é **nullable** (contratos antigos e de prazo indeterminado seguem válidos) e entra em
+  `CONTENT_AFFECTING_FIELDS`: só é editável em `RASCUNHO` e gera nova versão. Há a variável de modelo
+  `{{contrato.data_fim}}` (vazia sem `endDate`; modelos antigos não mudam).
+- O job notifica o **responsável** (`responsibleId`) com `Notification` do tipo `WARNING` quando o contrato está
+  `ATIVO` ou `ASSINADO` e o término está entre **hoje e 30 dias** (dias-calendário UTC). Contratos **já vencidos não
+  geram alerta** (o alerta é preventivo). Cada alerta também grava `AuditLog` com autor `Sistema`.
+- **Idempotência no banco:** `renewalAlertForEndDate` guarda para qual `endDate` o alerta foi enviado. O job
+  "reivindica" o contrato com um `UPDATE ... WHERE (renewalAlertForEndDate IS NULL OR <> endDate)` na **mesma transação**
+  que cria a notificação/auditoria; execuções concorrentes serializam no lock da linha e só uma notifica. Alterar o
+  `endDate` abre um novo ciclo de alerta.
+
+## Cron diário (alertas de renovação)
+
+Sem servidor de cron: o workflow `.github/workflows/contract-renewal-alerts.yml` roda todo dia (11:00 UTC) e faz um
+`curl` autenticado no backend publicado. Não sobe o backend nem instala dependências.
+
+1. Gere o segredo: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+2. GitHub → **Settings → Secrets and variables → Actions** → secret `CRON_SECRET`.
+3. Backend (Render → Environment): `CRON_SECRET=<mesmo valor>`.
+4. Se a URL do backend não for a padrão do workflow, crie a *variable* `BACKEND_URL` (mesmo menu, aba *Variables*).
+5. Execução manual: **Actions → Contract renewal alerts → Run workflow** — ou
+   `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://SEU-BACKEND/internal/jobs/contract-renewal-alerts`.
+
+O endpoint aceita só `POST`, não usa o JWT de usuário, compara o segredo em tempo constante (SHA-256 + `timingSafeEqual`),
+responde apenas com contagens e o header `Authorization` é redigido nos logs. Limitações do plano gratuito: o cron do
+GitHub usa UTC, pode atrasar alguns minutos, e em repositórios públicos workflows agendados são desativados após 60
+dias sem atividade; a instância gratuita do Render "dorme", então o `curl` tem retry/timeout generosos.
+
+## Aceite eletrônico por link público
+
+> **É assinatura eletrônica *simples* (aceite), não assinatura digital ICP-Brasil.** Não usa certificado digital e a
+> prova se resume ao registro abaixo; para contratos que exijam certificado, use um provedor de assinatura qualificada.
+
+- **Gerar:** `POST /contracts/:id/signature-links` (ADMIN/LAWYER), com o contrato em `ENVIADO` ou `EM_REVISAO` (os
+  status com transição válida para `ASSINADO`). Gerar um novo link **invalida o anterior**. A URL usa `PUBLIC_APP_URL`.
+- **Token:** 32 bytes de `crypto.randomBytes` em base64url. **Só o SHA-256 é salvo** (`tokenHash`, único); o token
+  bruto existe apenas na resposta da geração.
+- **Expiração:** `PUBLIC_SIGNATURE_EXPIRATION_HOURS` (padrão 72h). Expirado → `410 SIGNATURE_LINK_EXPIRED`.
+- **Uso único:** `UPDATE ... WHERE usedAt IS NULL AND revokedAt IS NULL AND expiresAt > now` dentro da transação que
+  também move o contrato para `ASSINADO`; requisições simultâneas → só uma recebe `201`, as demais `410`.
+  Se o contrato não puder mais ser assinado, a transação é revertida e o link não é "gasto".
+- **Versão:** o link é atrelado a `contractVersionId`; mostra exatamente aquela versão. Se o contrato ganhar nova
+  versão ou sair de `ENVIADO`/`EM_REVISAO`, o link passa a responder `410` (nunca aceita outra versão).
+- **Registro:** nome, CPF/CNPJ (dígitos verificadores validados), IP (`request.ip`, com `trustProxy`), user-agent e
+  `signedAt` são definidos **pelo servidor**; `ip`/`signedAt` no body são ignorados.
+- **Hash do evento:** `signatureHash` = SHA-256 de um JSON canônico (`signatureId`, `contractId`, `contractVersionId`,
+  `versionNumber`, SHA-256 do conteúdo, nome, documento, IP, `signedAt`, versão do texto de consentimento) — **sem o
+  token**. Permite conferir depois a integridade do registro.
+- **Auditoria:** `gerou link de aceite eletrônico do` (autor = usuário) e `assinou eletronicamente` (autor = `Sistema`,
+  sem CPF/IP/token no rótulo). O responsável recebe uma notificação.
+- **Proteções:** rate limit por IP nos endpoints públicos (`429`), `Cache-Control: no-store`, `X-Robots-Tag`, token
+  redigido nos logs de requisição, 404 idêntico para qualquer token desconhecido (sem enumeração).
+- **Limitações:** o rate limit é em memória (uma instância; com várias seria preciso store compartilhado); não há
+  verificação da identidade do signatário além do link (posse do link + CPF/CNPJ informado, não conferido contra base
+  oficial); quem tiver o link pode assinar até ele expirar.
+
 
 `requireRole('ADMIN', 'LAWYER', ...)` (em `src/shared/auth/require-role.ts`)
 já está pronto para proteger rotas futuras por papel — nenhuma rota atual

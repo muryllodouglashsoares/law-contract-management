@@ -33,6 +33,12 @@ export default defineConfig({
       // não esbarrarem no limite; o teste de rate limit usa buildApp({ loginRateLimit }).
       LOGIN_RATE_LIMIT_MAX: '1000',
       LOGIN_RATE_LIMIT_WINDOW: '1 minute',
+      // Aceite eletrônico: origem pública fixa nos testes + rate limit alto (muitas requisições do mesmo IP);
+      // os testes de rate limit usam buildApp({ publicSignatureRateLimit }).
+      PUBLIC_APP_URL: 'https://app.lexcontract.test',
+      PUBLIC_SIGNATURE_EXPIRATION_HOURS: '72',
+      PUBLIC_SIGNATURE_RATE_LIMIT_MAX: '1000',
+      PUBLIC_SIGNATURE_RATE_LIMIT_WINDOW: '1 minute',
       // Testes sempre usam o driver local (nunca um bucket real); arquivos ficam fora de ./uploads.
       STORAGE_DRIVER: 'local',
       UPLOADS_DIR: './uploads-test',
