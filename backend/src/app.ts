@@ -3,7 +3,7 @@ import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 
 import { env } from './config/env';
 import { auditRoutes } from './modules/audit/audit.routes';
@@ -64,11 +64,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       // o redact do pino não mascara trechos de string, então o serializer de `req` troca o
       // token por [REDACTED] antes de qualquer linha de log (incoming request/completed/erro).
       serializers: {
-        req(request: { method?: string; url?: string; headers?: Record<string, unknown>; ip?: string }) {
+        req(request: FastifyRequest) {
           return {
             method: request.method,
-            url: request.url ? redactSignatureTokenInUrl(request.url) : request.url,
-            host: request.headers?.host,
+            url: redactSignatureTokenInUrl(request.url),
+            host: request.headers.host,
             remoteAddress: request.ip,
           };
         },
