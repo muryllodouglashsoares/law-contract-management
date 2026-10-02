@@ -24,6 +24,7 @@ Todos os itens abaixo existem no código atual (rotas, services e páginas corre
 - **Documentos**: upload, categorização e download de arquivos vinculados a um contrato.
 - **Pagamentos**: parcelas por contrato, registro de recebimento e indicadores (pago, pendente, atrasado, a receber nos próximos 30 dias).
 - **Notificações** por usuário, geradas automaticamente em eventos-chave do contrato (enviado, assinado, ativo).
+- **Web Push** (notificações do navegador, gratuito, via VAPID): aviso imediato de contrato próximo do vencimento e de contrato assinado pelo cliente, ativado pelo usuário em Configurações. Veja [`backend/README.md`](backend/README.md#web-push-notificações-do-navegador).
 - **Histórico/auditoria**: toda ação relevante (criação, edição, remoção, mudança de status, pagamento) é registrada e listada.
 - **Configurações/gestão do escritório**: dados do escritório editáveis (exclusivo de `ADMIN`) e perfil do usuário autenticado.
 
@@ -60,6 +61,7 @@ O sistema é **multi-tenant por escritório**: todo recurso de negócio guarda u
 - Fastify 5
 - PostgreSQL 16 + Prisma ORM 6
 - Zod (validação de env vars e de requisições)
+- `web-push` (Web Push com VAPID)
 - JWT (`@fastify/jwt`) + bcryptjs
 - Vitest (testes unitários e de integração)
 
@@ -78,6 +80,7 @@ Mecanismos existentes e verificáveis no código:
 - **CORS** restrito à(s) origem(ns) configurada(s) em `CORS_ORIGIN`.
 - **Isolamento multi-tenant por `officeId`**: toda query de leitura/escrita nos services filtra pelo escritório do usuário autenticado (`request.user.officeId`), nunca por um id vindo livremente do cliente.
 - **Endpoints públicos de aceite** protegidos por token aleatório (SHA-256 no banco), expiração, uso único transacional e rate limit próprio; o job interno de renovação usa `CRON_SECRET`, não o JWT.
+- **Web Push**: a chave privada VAPID existe só no backend; subscriptions pertencem ao usuário autenticado, o `endpoint` só é aceito de serviços de push conhecidos (anti-SSRF) e o conteúdo do push é apenas um resumo sem dados sensíveis.
 - **Redação de dados sensíveis nos logs**: o logger (Pino) tem `redact` configurado para nunca logar o header `Authorization`, cookies, senha ou hash de senha (`backend/src/app.ts`).
 
 Este projeto **não** alega conformidade com LGPD ou qualquer certificação de segurança — os itens acima são os mecanismos efetivamente implementados, não uma auditoria de compliance.
@@ -165,6 +168,7 @@ law-contract-management/
 ├── .github/workflows/ci.yml     # pipeline de CI
 ├── Dockerfile                    # imagem de produção do frontend (Node build → Nginx)
 ├── nginx.conf                     # fallback de SPA para o React Router
+├── public/sw.js                    # Service Worker do Web Push
 ├── src/                             # frontend (React + Vite)
 │   ├── components/                    # ProtectedRoute, StatusBadge...
 │   ├── contexts/AuthContext.tsx         # sessão do usuário

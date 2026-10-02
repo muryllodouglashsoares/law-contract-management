@@ -121,6 +121,7 @@ Veja `backend/.env.example` (versionado; o `.gitignore` tem a exceção `!.env.e
 | `MAX_UPLOAD_SIZE_BYTES` | não | Limite de upload por arquivo (padrão: 10 MB)     |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | **sim, se** `neon-s3` | Credenciais do bucket (somente no backend) |
 | `S3_FORCE_PATH_STYLE` | não | Path-style nas URLs S3 (padrão: `true`)             |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | não (**as três juntas**) | Web Push. Vazias = Web Push desativado (notificações internas seguem normais). A privada só existe no backend. Veja [Web Push](#web-push-notificações-do-navegador) |
 
 ### Rate limit do login
 
@@ -380,6 +381,17 @@ Usuários criados pelo ADMIN nascem com `mustChangePassword = true` (o frontend 
 | POST   | `/public/signatures/:token/sign` | token | `{ signerName, signerDocument, consent: true }` → registra o aceite |
 | POST   | `/internal/jobs/contract-renewal-alerts` | `CRON_SECRET` | Executa o job de renovação → `{ status, processed, notified, skipped }` |
 
+### Web Push (`/notifications/push`)
+
+Todas exigem JWT e operam **apenas nas subscriptions do próprio usuário** (qualquer papel).
+
+| Método | Rota | Descrição |
+| ------ | ---- | --------- |
+| GET    | `/notifications/push/status` | `{ configured, publicKey, subscriptionCount }` — `publicKey` é a chave VAPID **pública** |
+| POST   | `/notifications/push/subscribe` | Corpo = `PushSubscription.toJSON()` (`{ endpoint, keys: { p256dh, auth } }`). Idempotente por `endpoint` → 204. `409` se o servidor não tem VAPID |
+| DELETE | `/notifications/push/subscribe` | `{ endpoint }` — remove só a subscription do próprio usuário → 204 |
+| POST   | `/notifications/push/test` | Envia um aviso de teste **aos próprios dispositivos** (5/min) → `{ sent }` |
+
 ## Término do contrato e alerta de renovação
 
 - `Contract.endDate` é **nullable** (contratos antigos e de prazo indeterminado seguem válidos) e entra em
@@ -409,6 +421,80 @@ O endpoint aceita só `POST`, não usa o JWT de usuário, compara o segredo em t
 responde apenas com contagens e o header `Authorization` é redigido nos logs. Limitações do plano gratuito: o cron do
 GitHub usa UTC, pode atrasar alguns minutos, e em repositórios públicos workflows agendados são desativados após 60
 dias sem atividade; a instância gratuita do Render "dorme", então o `curl` tem retry/timeout generosos.
+
+## Web Push (notificações do navegador)
+
+Camada **adicional** às notificações internas (`Notification`), que continuam sendo o histórico dentro do sistema.
+O Web Push é só o aviso imediato no navegador, mesmo com a aba fechada:
+
+```text
+Evento ─┬─► Notification interna (histórico)
+        └─► Web Push (aviso rápido)        ← futuramente: e-mail transacional
+```
+
+**Tecnologia (100% gratuita):** padrão Web Push — Service Worker, Push API, Notification API, VAPID e a biblioteca
+open source [`web-push`](https://github.com/web-push-libs/web-push). Sem Firebase, sem serviço pago.
+
+### Configuração
+
+1. Gere o par de chaves **uma vez** (`web-push` já é dependência do backend):
+
+   ```bash
+   cd backend && npx web-push generate-vapid-keys --json
+   ```
+
+2. Configure no backend (Render → Environment, ou `backend/.env`):
+
+   ```env
+   VAPID_PUBLIC_KEY=<publicKey>
+   VAPID_PRIVATE_KEY=<privateKey>      # SEGREDO: só no backend, nunca no git/frontend
+   VAPID_SUBJECT=mailto:contato@seudominio.com   # ou uma URL https
+   ```
+
+   As três são obrigatórias juntas; sem elas o Web Push fica desativado e a tela de Configurações informa isso.
+   Não existe variável no frontend: ele recebe a chave **pública** em `GET /notifications/push/status`.
+   Trocar o par de chaves invalida as subscriptions existentes (os usuários precisam reativar).
+
+3. Aplique a migration (`npm run db:migrate:deploy`) — cria a tabela `push_subscriptions`.
+
+**Produção exige HTTPS** (frontend e API). Em desenvolvimento, `http://localhost` é aceito pelos navegadores.
+No iPhone/iPad (Safari 16.4+) o Web Push só funciona com o site **adicionado à Tela de Início**.
+
+### Como funciona
+
+- **Banco:** `PushSubscription` (`endpoint` único, `p256dh`, `auth`, `userId`, `officeId`). Um usuário tem **várias**
+  (cada navegador/dispositivo). Apagar o usuário ou o escritório apaga as subscriptions (cascade).
+- **`PushService`** (`src/modules/notifications/push.service.ts`) é o **único** ponto que envia push
+  (`pushService.sendToUser(...)`); a chamada à biblioteca fica isolada em `push.sender.ts`. Ele envia a todos os
+  dispositivos do usuário **ativo** do escritório, **remove subscriptions inválidas** (resposta 404/410 do serviço de
+  push) e **nunca lança**: falha de push não desfaz nem quebra o evento que o originou.
+- **Fronteira de segurança:** não existe rota para enviar push a terceiros — o envio só parte de eventos do backend. O
+  `endpoint` informado pelo cliente só é aceito se for **https** de um serviço de push conhecido (FCM, Mozilla, Apple,
+  Windows), o que impede usar o backend como proxy para hosts internos (SSRF).
+- **Idempotência:** o push usa o **mesmo gatilho** da `Notification`. No cron, só é enviado quando a execução venceu a
+  reivindicação do contrato (`renewalAlertForEndDate`) e a transação foi confirmada — reexecuções não duplicam.
+- **Privacidade:** o push pode aparecer na tela bloqueada, então leva só um resumo (`O contrato #102 vence em 7 dias.`):
+  sem nome de cliente, valores, trechos do contrato ou dados pessoais. O detalhe fica dentro do sistema.
+
+### Eventos que geram Web Push
+
+| Tipo (`PUSH_EVENT_TYPES`) | Gatilho | Destinatário | Ao clicar |
+| --- | --- | --- | --- |
+| `CONTRACT_RENEWAL` | Job diário de renovação (`ContractRenewalJobService`), junto da `Notification` | Responsável pelo contrato | `/contratos/<id>` |
+| `CONTRACT_SIGNED` | Cliente conclui o aceite eletrônico (`ContractSignatureService.sign`), junto da `Notification` | Responsável pelo contrato | `/contratos/<id>` |
+| `TEST` | `POST /notifications/push/test` (botão "Enviar teste") | O próprio usuário | `/notificacoes` |
+
+As demais `Notification` (ex.: mudança manual de status feita por um usuário) **não** geram push de propósito, para
+evitar excesso de avisos. Para integrar um novo evento: adicione o tipo em `push.types.ts` e chame
+`pushService.sendToUser(...)` **depois** do commit da transação do evento.
+
+### Frontend
+
+`public/sw.js` (Service Worker, sem cache/`fetch`), `src/lib/push-client.ts` (permissão, `PushManager`, sincronização),
+`src/hooks/usePushNotifications.ts` e `src/components/BrowserNotificationsSetting.tsx` (Configurações → Preferências).
+A permissão só é pedida ao clicar em **Ativar notificações**. Ao sair do sistema (logout) a subscription do dispositivo é
+removida do servidor, para o próximo usuário do computador não ver os avisos de quem saiu; ao entrar de novo, o mesmo
+usuário é re-sincronizado automaticamente.
 
 ## Aceite eletrônico por link público
 

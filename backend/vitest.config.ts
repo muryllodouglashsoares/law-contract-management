@@ -39,6 +39,10 @@ export default defineConfig({
       PUBLIC_SIGNATURE_EXPIRATION_HOURS: '72',
       PUBLIC_SIGNATURE_RATE_LIMIT_MAX: '1000',
       PUBLIC_SIGNATURE_RATE_LIMIT_WINDOW: '1 minute',
+      // Web Push: par VAPID descartável, só para testes (nunca use estas chaves em nenhum ambiente real).
+      VAPID_PUBLIC_KEY: 'BFJL9SNgh7x-y1KDC-K2Jy0CBIu64guiZNxce3fHpMLBtZae9k1E0pUrWqMoKv9QSwo3k8nyrphgOO4_6vkIMxs',
+      VAPID_PRIVATE_KEY: 'DuMcp87igLHFAEDOZ591bjNozHYPNEg8I8tLUZLapf8',
+      VAPID_SUBJECT: 'mailto:test@lexcontract.test',
       // Testes sempre usam o driver local (nunca um bucket real); arquivos ficam fora de ./uploads.
       STORAGE_DRIVER: 'local',
       UPLOADS_DIR: './uploads-test',

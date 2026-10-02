@@ -25,3 +25,9 @@
   Referrer-Policy: no-referrer
   X-Robots-Tag: noindex, nofollow
   Cache-Control: no-store
+
+# Service Worker do Web Push: o navegador precisa revalidar o arquivo a cada visita para
+# receber atualizações dele (nunca servir uma versão antiga do cache).
+/sw.js
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff

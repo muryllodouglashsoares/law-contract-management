@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
 import { ApiError, apiClient, getStoredToken, setStoredToken, setUnauthorizedHandler } from '../lib/api-client';
+import { detachPushOnLogout } from '../lib/push-client';
 import type { Office, User } from '../types/api';
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
@@ -70,6 +71,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
+    // Antes de apagar o token: tira este dispositivo do Web Push de quem está saindo.
+    detachPushOnLogout();
     setStoredToken(null);
     setState({ status: 'unauthenticated', user: null, office: null });
   }, []);

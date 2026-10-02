@@ -17,6 +17,7 @@ import { dashboardRoutes } from './modules/dashboard/dashboard.routes';
 import { documentRoutes } from './modules/documents/document.routes';
 import { internalJobsRoutes, type RenewalJobRunner } from './modules/internal-jobs/internal-jobs.routes';
 import { notificationRoutes } from './modules/notifications/notification.routes';
+import { pushService } from './modules/notifications/push.instance';
 import { officeRoutes } from './modules/offices/office.routes';
 import { paymentRoutes } from './modules/payments/payment.routes';
 import { searchRoutes } from './modules/search/search.routes';
@@ -165,7 +166,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.register(internalJobsRoutes, {
     prefix: '/internal',
     cronSecret: options.cronSecret ?? env.CRON_SECRET,
-    renewalJob: options.renewalJob ?? new ContractRenewalJobService(prisma),
+    renewalJob: options.renewalJob ?? new ContractRenewalJobService(prisma, pushService),
   });
 
   return app;

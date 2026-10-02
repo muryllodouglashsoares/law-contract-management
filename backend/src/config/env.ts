@@ -21,6 +21,8 @@ const NEON_S3_REQUIRED_VARS = [
   'S3_SECRET_ACCESS_KEY',
 ] as const;
 
+const VAPID_VARS = ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'] as const;
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -103,19 +105,45 @@ const envSchema = z.object({
     .regex(/^\d+(\s*[a-zA-Z]+)?$/, 'Use um valor como "1 minute", "30 seconds" ou "60000" (ms)')
     .default('1 minute'),
 
+  // Web Push (VAPID). Opcionais: sem elas o Web Push fica DESATIVADO (as notificações internas
+  // continuam normais). Se uma for informada, as três são obrigatórias. Gere o par de chaves com:
+  //   npx web-push generate-vapid-keys --json
+  // A chave PRIVADA existe somente no backend; a pública é entregue ao frontend por
+  // GET /notifications/push/status.
+  VAPID_PUBLIC_KEY: optionalString,
+  VAPID_PRIVATE_KEY: optionalString,
+  // Contato do remetente exigido pelo padrão: `mailto:alguem@dominio` ou uma URL https.
+  VAPID_SUBJECT: optionalString.refine(
+    (value) => value === undefined || /^(mailto:[^\s@]+@[^\s@]+|https:\/\/[^\s]+)$/.test(value),
+    { message: 'VAPID_SUBJECT deve ser "mailto:email@dominio" ou uma URL https' },
+  ),
+
   // Tamanho máximo de upload de um documento, em bytes. Mantido alinhado
   // com o texto já exibido na tela de Documentos ("Máx. 10 MB por arquivo").
   MAX_UPLOAD_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
 }).superRefine((config, ctx) => {
-  if (config.STORAGE_DRIVER !== 'neon-s3') return;
+  if (config.STORAGE_DRIVER === 'neon-s3') {
+    for (const name of NEON_S3_REQUIRED_VARS) {
+      if (!config[name]) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [name],
+          message: `${name} é obrigatória quando STORAGE_DRIVER=neon-s3`,
+        });
+      }
+    }
+  }
 
-  for (const name of NEON_S3_REQUIRED_VARS) {
-    if (!config[name]) {
-      ctx.addIssue({
-        code: 'custom',
-        path: [name],
-        message: `${name} é obrigatória quando STORAGE_DRIVER=neon-s3`,
-      });
+  // Web Push é tudo-ou-nada: configuração parcial falharia só no primeiro envio.
+  if (VAPID_VARS.some((name) => config[name])) {
+    for (const name of VAPID_VARS) {
+      if (!config[name]) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [name],
+          message: `${name} é obrigatória quando o Web Push (VAPID) está configurado`,
+        });
+      }
     }
   }
 });
@@ -150,4 +178,9 @@ if (env.NODE_ENV === 'production' && env.STORAGE_DRIVER === 'local') {
   console.warn(
     '⚠️  STORAGE_DRIVER=local em produção: o disco do container é efêmero e os documentos serão perdidos em deploy/restart. Use STORAGE_DRIVER=neon-s3.',
   );
+}
+
+if (env.NODE_ENV === 'production' && !env.VAPID_PUBLIC_KEY) {
+  // eslint-disable-next-line no-console
+  console.warn('⚠️  VAPID_* não definidas: o Web Push ficará desativado (notificações internas não são afetadas).');
 }

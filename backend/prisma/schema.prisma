@@ -51,6 +51,7 @@ model Office {
   documents         Document[]
   payments          Payment[]
   notifications     Notification[]
+  pushSubscriptions PushSubscription[]
   auditLogs         AuditLog[]
   publicSignatures  ContractPublicSignature[]
 
@@ -79,6 +80,7 @@ model User {
   contractVersions     ContractVersion[]
   documentsUploaded    Document[]
   notifications        Notification[]
+  pushSubscriptions    PushSubscription[]
   auditLogs            AuditLog[]
   publicSignaturesCreated ContractPublicSignature[]
 
@@ -400,6 +402,31 @@ model Notification {
   @@index([officeId])
   @@index([userId, read])
   @@map("notifications")
+}
+
+/// Subscription Web Push de UM navegador/dispositivo de um usuário. Um usuário
+/// pode ter várias (computador, notebook, outro navegador), por isso `userId`
+/// NÃO é único; o `endpoint` (URL opaca do serviço de push do navegador) é.
+/// Se o mesmo navegador passar a ser usado por outro usuário, o upsert por
+/// `endpoint` simplesmente transfere a subscription para ele.
+/// `p256dh` e `auth` são as chaves públicas do navegador usadas para cifrar o
+/// payload; nunca saem do backend (a API não as devolve).
+model PushSubscription {
+  id        String   @id @default(uuid())
+  officeId  String
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  office Office @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([officeId])
+  @@map("push_subscriptions")
 }
 
 // ---------------------------------------------------------------------

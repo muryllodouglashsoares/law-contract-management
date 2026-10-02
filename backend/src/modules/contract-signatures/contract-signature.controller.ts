@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../../config/env';
 import { prisma } from '../../shared/database/prisma';
 import type { ContractIdParams } from '../contracts/contract.schemas';
+import { pushService } from '../notifications/push.instance';
 import type { PublicTokenParams, SignContractBody } from './contract-signature.schemas';
 import { ContractSignatureService } from './contract-signature.service';
 
@@ -11,6 +12,7 @@ export function createSignatureService(): ContractSignatureService {
     // Nunca derivado do header Host. Em desenvolvimento há um padrão local; em produção é obrigatório.
     publicAppUrl: env.PUBLIC_APP_URL ?? (env.NODE_ENV === 'production' ? undefined : 'http://localhost:5173'),
     expirationHours: env.PUBLIC_SIGNATURE_EXPIRATION_HOURS,
+    push: pushService,
   });
 }
 

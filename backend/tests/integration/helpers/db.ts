@@ -8,7 +8,7 @@ import { hashPassword } from '../../../src/shared/auth/password';
  */
 export async function resetDatabase(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "audit_logs", "notifications", "payments", "documents", "contract_public_signatures", "contract_versions", "contracts", "contract_templates", "clients", "users", "offices" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "audit_logs", "push_subscriptions", "notifications", "payments", "documents", "contract_public_signatures", "contract_versions", "contracts", "contract_templates", "clients", "users", "offices" RESTART IDENTITY CASCADE',
   );
 }
 

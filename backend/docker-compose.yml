@@ -46,6 +46,10 @@ services:
       CRON_SECRET: ${CRON_SECRET:-}
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:5173}
       PUBLIC_SIGNATURE_EXPIRATION_HOURS: ${PUBLIC_SIGNATURE_EXPIRATION_HOURS:-72}
+      # Web Push (opcional; as três juntas). Gere com: npx web-push generate-vapid-keys --json
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     ports:
       - '3333:3333'
     command: sh -c "npx prisma migrate deploy && node dist/server.js"

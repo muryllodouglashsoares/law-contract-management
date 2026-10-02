@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, FileText, BookTemplate, FolderOpen, CreditCard,
@@ -8,6 +8,7 @@ import {
 import GlobalSearch from '../components/GlobalSearch';
 import { useAuth } from '../contexts/AuthContext';
 import { useApiQuery } from '../hooks/useApiQuery';
+import { syncPush } from '../lib/push-client';
 import { ROLE_LABELS } from '../lib/roles';
 import { notificationsService } from '../services/notifications';
 
@@ -64,6 +65,12 @@ export default function AppLayout() {
     [],
   );
   const unreadCount = notificationsSummary?.unreadCount ?? 0;
+
+  // Web Push: se este navegador já foi ativado por este usuário, garante o registro no servidor.
+  const userId = user?.id;
+  useEffect(() => {
+    if (userId) void syncPush(userId);
+  }, [userId]);
 
   const handleLogout = () => {
     logout();

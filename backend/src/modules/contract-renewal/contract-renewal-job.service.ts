@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { AUDIT_ACTIONS, SYSTEM_ACTOR_LABEL, writeAuditLog } from '../../shared/domain/audit';
 import { createNotification } from '../../shared/domain/notify';
 import { RENEWAL_ALERT_CONTRACT_STATUSES } from '../../shared/domain/status-map';
+import { PUSH_EVENT_TYPES, type PushNotifier } from '../notifications/push.types';
 
 /** Janela do alerta: contratos que terminam em até N dias (inclusive). */
 export const RENEWAL_ALERT_WINDOW_DAYS = 30;
@@ -50,6 +51,13 @@ export function buildRenewalAlertDescription(input: {
   return `${subject} termina em ${end} e está a ${input.days} ${unit} do vencimento.`;
 }
 
+/** Corpo curto do Web Push (pode aparecer na tela bloqueada): sem nome de cliente nem datas. */
+export function buildRenewalPushBody(input: { number: number; days: number }): string {
+  const subject = `O contrato #${input.number}`;
+  if (input.days <= 0) return `${subject} vence hoje.`;
+  return `${subject} vence em ${input.days} ${input.days === 1 ? 'dia' : 'dias'}.`;
+}
+
 /**
  * Job diário de alerta de renovação. Executado via POST /internal/jobs/contract-renewal-alerts
  * (GitHub Actions) — sem servidor de cron dedicado.
@@ -64,9 +72,16 @@ export function buildRenewalAlertDescription(input: {
  * Duas execuções concorrentes serializam no lock da linha; a segunda reavalia o WHERE (READ
  * COMMITTED), vê count = 0 e não notifica. Se o endDate mudar depois, o valor deixa de
  * coincidir e um novo ciclo de alerta fica elegível.
+ *
+ * Web Push (opcional): o aviso de navegador é enviado SOMENTE quando esta execução venceu a
+ * reivindicação acima e a transação foi confirmada — ou seja, exatamente 1 push por
+ * Notification criada, com a mesma idempotência. Falha de push nunca afeta o job.
  */
 export class ContractRenewalJobService {
-  constructor(private readonly prisma: PrismaDeps) {}
+  constructor(
+    private readonly prisma: PrismaDeps,
+    private readonly push?: PushNotifier,
+  ) {}
 
   async run(now: Date = new Date()): Promise<RenewalJobResult> {
     const today = startOfUtcDay(now);
@@ -137,7 +152,7 @@ export class ContractRenewalJobService {
 
     const days = daysUntil(contract.endDate, now);
 
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const alerted = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const claimed = await tx.contract.updateMany({
         where: {
           id: contract.id,
@@ -185,5 +200,21 @@ export class ContractRenewalJobService {
 
       return true;
     });
+
+    // Fora da transação: nunca enviar push de algo que ainda pode sofrer rollback.
+    if (alerted) {
+      await this.push?.sendToUser(
+        { officeId: contract.officeId, userId: contract.responsibleId },
+        {
+          type: PUSH_EVENT_TYPES.CONTRACT_RENEWAL,
+          title: 'Contrato próximo do vencimento',
+          body: buildRenewalPushBody({ number: contract.number, days }),
+          url: `/contratos/${contract.id}`,
+          tag: `renewal:${contract.id}`,
+        },
+      );
+    }
+
+    return alerted;
   }
 }

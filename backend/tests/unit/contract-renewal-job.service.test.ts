@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ContractRenewalJobService,
   buildRenewalAlertDescription,
+  buildRenewalPushBody,
   daysUntil,
 } from '../../src/modules/contract-renewal/contract-renewal-job.service';
 
@@ -26,7 +27,7 @@ function makeContract(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeService(contracts: ReturnType<typeof makeContract>[], claimCount = 1) {
+function makeService(contracts: ReturnType<typeof makeContract>[], claimCount = 1, withPush = false) {
   const findMany = vi.fn().mockResolvedValueOnce(contracts).mockResolvedValue([]);
   const updateMany = vi.fn().mockResolvedValue({ count: claimCount });
   const notificationCreate = vi.fn().mockResolvedValue({});
@@ -36,7 +37,9 @@ function makeService(contracts: ReturnType<typeof makeContract>[], claimCount = 
     contract: { findMany },
     $transaction: vi.fn(async (cb: (t: typeof tx) => unknown) => cb(tx)),
   } as unknown as ConstructorParameters<typeof ContractRenewalJobService>[0];
-  return { service: new ContractRenewalJobService(prisma), findMany, updateMany, notificationCreate, auditCreate };
+  const sendToUser = vi.fn().mockResolvedValue({ sent: 1, removed: 0, failed: 0 });
+  const service = new ContractRenewalJobService(prisma, withPush ? { sendToUser } : undefined);
+  return { service, findMany, updateMany, notificationCreate, auditCreate, sendToUser };
 }
 
 describe('ContractRenewalJobService (unit)', () => {
@@ -111,6 +114,57 @@ describe('ContractRenewalJobService (unit)', () => {
     const { service, notificationCreate } = makeService([makeContract({ endDate: day(5) })]);
     await service.run(NOW);
     expect(notificationCreate.mock.calls[0]?.[0].data.priority).toBe(true);
+  });
+});
+
+describe('ContractRenewalJobService — Web Push', () => {
+  it('envia 1 push ao responsável junto com a Notification, sem nome de cliente', async () => {
+    const { service, sendToUser, notificationCreate } = makeService([makeContract({ endDate: day(7) })], 1, true);
+    await service.run(NOW);
+
+    expect(notificationCreate).toHaveBeenCalledTimes(1);
+    expect(sendToUser).toHaveBeenCalledTimes(1);
+    expect(sendToUser).toHaveBeenCalledWith(
+      { officeId: 'office-1', userId: 'user-1' },
+      {
+        type: 'CONTRACT_RENEWAL',
+        title: 'Contrato próximo do vencimento',
+        body: 'O contrato #102 vence em 7 dias.',
+        url: '/contratos/c-1',
+        tag: 'renewal:c-1',
+      },
+    );
+    expect(JSON.stringify(sendToUser.mock.calls)).not.toContain('João');
+  });
+
+  it('NÃO envia push quando outra execução já reivindicou o contrato (count = 0)', async () => {
+    const { service, sendToUser } = makeService([makeContract()], 0, true);
+    await service.run(NOW);
+    expect(sendToUser).not.toHaveBeenCalled();
+  });
+
+  it('NÃO envia push quando já foi alertado para o mesmo endDate (reexecução do cron)', async () => {
+    const { service, sendToUser } = makeService([makeContract({ renewalAlertForEndDate: day(27) })], 1, true);
+    await service.run(NOW);
+    expect(sendToUser).not.toHaveBeenCalled();
+  });
+
+  it('NÃO envia push se a transação falhar (rollback)', async () => {
+    const { service, sendToUser, notificationCreate } = makeService([makeContract()], 1, true);
+    notificationCreate.mockRejectedValue(new Error('db error'));
+    await expect(service.run(NOW)).rejects.toThrow('db error');
+    expect(sendToUser).not.toHaveBeenCalled();
+  });
+
+  it('funciona normalmente sem Web Push configurado', async () => {
+    const { service } = makeService([makeContract()]);
+    await expect(service.run(NOW)).resolves.toEqual({ processed: 1, notified: 1, skipped: 0 });
+  });
+
+  it('buildRenewalPushBody trata hoje, 1 dia e vários dias', () => {
+    expect(buildRenewalPushBody({ number: 102, days: 0 })).toBe('O contrato #102 vence hoje.');
+    expect(buildRenewalPushBody({ number: 102, days: 1 })).toBe('O contrato #102 vence em 1 dia.');
+    expect(buildRenewalPushBody({ number: 102, days: 7 })).toBe('O contrato #102 vence em 7 dias.');
   });
 });
 

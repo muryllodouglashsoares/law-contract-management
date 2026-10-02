@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { User, Building2, Shield, Sliders, Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
+import BrowserNotificationsSetting from '../components/BrowserNotificationsSetting';
 import { useAuth } from '../contexts/AuthContext';
 import { toErrorMessage } from '../hooks/useApiQuery';
 import { usersService } from '../services/users';
@@ -20,7 +21,7 @@ function initialsOf(name: string): string {
 export default function SettingsPage() {
   const { user, office, refresh } = useAuth();
   const [tab, setTab] = useState('perfil');
-  const [notifications, setNotifications] = useState({ email: true, browser: true, whatsapp: false });
+  const [notifications, setNotifications] = useState({ email: true, whatsapp: false });
 
   // --- Perfil -----------------------------------------------------------
   const [profileForm, setProfileForm] = useState({ name: '', phone: '', oabNumber: '' });
@@ -271,10 +272,10 @@ export default function SettingsPage() {
                 <div className="space-y-5">
                   <div className="pb-5 border-b" style={{ borderColor: 'var(--color-border)' }}>
                     <h3 className="text-xs font-semibold text-slate-700 mb-1">Notificações</h3>
-                    <p className="text-xs text-slate-400 mb-3">Estas preferências ainda não são salvas no servidor — válidas apenas nesta sessão.</p>
+                    <BrowserNotificationsSetting />
+                    <p className="text-xs text-slate-400 mt-3 mb-1">As preferências de e-mail e WhatsApp ainda não são salvas no servidor — válidas apenas nesta sessão.</p>
                     {[
                       { key: 'email', label: 'E-mail', desc: 'Receber alertas por e-mail' },
-                      { key: 'browser', label: 'Navegador', desc: 'Notificações push no navegador' },
                       { key: 'whatsapp', label: 'WhatsApp', desc: 'Alertas via WhatsApp' },
                     ].map(n => (
                       <div key={n.key} className="flex items-center justify-between py-3 border-b last:border-0" style={{ borderColor: 'var(--color-border)' }}>
