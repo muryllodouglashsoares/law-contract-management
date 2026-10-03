@@ -262,10 +262,16 @@ jobs:
         env:
           DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
+          # Remove espaços, quebras de linha e aspas coladas junto com o secret (causa comum de "URL rejected").
+          DEPLOY_HOOK_URL="$(printf '%s' "$DEPLOY_HOOK_URL" | tr -d '[:space:]"'"'"'')"
           if [ -z "$DEPLOY_HOOK_URL" ]; then
             echo "::warning::RENDER_DEPLOY_HOOK_URL não configurado — deploy do backend ignorado."
             exit 0
           fi
+          case "$DEPLOY_HOOK_URL" in
+            https://*) ;;
+            *) echo "::error::O secret não é uma URL https:// válida (confira se colou só a URL do Deploy Hook)."; exit 1 ;;
+          esac
           curl --fail --silent --show-error --retry 2 --max-time 30 -X POST "$DEPLOY_HOOK_URL" -o /dev/null
           echo "Deploy do backend (Render) disparado."
 
@@ -273,9 +279,15 @@ jobs:
         env:
           DEPLOY_HOOK_URL: ${{ secrets.CLOUDFLARE_PAGES_DEPLOY_HOOK_URL }}
         run: |
+          # Remove espaços, quebras de linha e aspas coladas junto com o secret (causa comum de "URL rejected").
+          DEPLOY_HOOK_URL="$(printf '%s' "$DEPLOY_HOOK_URL" | tr -d '[:space:]"'"'"'')"
           if [ -z "$DEPLOY_HOOK_URL" ]; then
             echo "::warning::CLOUDFLARE_PAGES_DEPLOY_HOOK_URL não configurado — deploy do frontend ignorado."
             exit 0
           fi
+          case "$DEPLOY_HOOK_URL" in
+            https://*) ;;
+            *) echo "::error::O secret não é uma URL https:// válida (confira se colou só a URL do Deploy Hook)."; exit 1 ;;
+          esac
           curl --fail --silent --show-error --retry 2 --max-time 30 -X POST "$DEPLOY_HOOK_URL" -o /dev/null
           echo "Deploy do frontend (Cloudflare Pages) disparado."
