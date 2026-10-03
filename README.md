@@ -67,7 +67,8 @@ O sistema é **multi-tenant por escritório**: todo recurso de negócio guarda u
 
 **Infra**
 - Docker (frontend e backend) + Docker Compose (backend + PostgreSQL)
-- GitHub Actions (CI)
+- GitHub Actions (CI + deploy encadeado)
+- Playwright (testes E2E, Chromium) · Sentry opcional (captura de erros)
 
 ## Segurança
 
@@ -139,15 +140,61 @@ Usuários de desenvolvimento criados pelo seed (senha `Senha@123` para todos):
 
 ## CI/CD
 
-O GitHub Actions (`.github/workflows/ci.yml`) roda em todo `push` para `main` e em toda `pull request`, com três jobs:
+O GitHub Actions (`.github/workflows/ci.yml`) roda em todo `push` para `main` e em toda `pull request`.
 
-- **frontend**: `npm ci` + `npm run build`.
+| Evento        | Jobs                                                                     |
+| ------------- | ------------------------------------------------------------------------ |
+| Pull Request  | `frontend` · `backend` · `docker` · `e2e`                                |
+| Push em `main`| `frontend` · `backend` · `docker` · `e2e` → **`deploy`**                 |
+
+- **frontend**: `npm ci` → `npm run typecheck` → `npm run build` (nessa ordem).
 - **backend**: `npm ci`, checagem de tipos (`npm run typecheck`), aplicação das migrations e execução dos testes (unitários + integração, com um PostgreSQL de serviço no próprio runner), e `npm run build`.
-- **docker**: garante que as imagens Docker do frontend e do backend continuam buildáveis (`docker build`), rodando somente depois que os dois jobs acima passam.
+- **docker**: garante que as imagens Docker do frontend e do backend continuam buildáveis (`docker build`), rodando somente depois que `frontend` e `backend` passam.
+- **e2e**: sobe um PostgreSQL **próprio** (`lexcontract_e2e`, separado do banco do job `backend`), aplica migrations + seed, inicia o backend em modo produção (`build` + `node dist/src/server.js`), builda o frontend e o serve com `vite preview`, e executa os 4 fluxos do Playwright (Chromium, com cache do navegador). Em caso de falha, publica o relatório HTML e os traces como artifact (nunca em execuções bem-sucedidas). Veja [Testes E2E](#testes-e2e).
+- **deploy**: depende de `[frontend, backend, e2e, docker]` e só roda em `push` para `main` — **nunca em Pull Request**. Dispara os Deploy Hooks do Render (backend) e do Cloudflare Pages (frontend) com `curl`.
 
 Além do CI, `.github/workflows/contract-renewal-alerts.yml` é um cron diário (e `workflow_dispatch`) que chama o endpoint interno de alertas de renovação — configuração em [`backend/README.md`](backend/README.md#cron-diário-alertas-de-renovação).
 
-Não há deploy automático nesta etapa — o CI valida o código, não o publica em nenhum ambiente.
+### Deploy automático (Deploy Hooks)
+
+O deploy acontece **somente depois de todos os gates** (typecheck, build, testes de integração, E2E e build das imagens Docker):
+
+```text
+push em main → frontend + backend + e2e + docker → deploy (Render + Cloudflare Pages)
+```
+
+| Secret do GitHub (`Settings → Secrets and variables → Actions`) | Destino                      |
+| ---------------------------------------------------------------- | ---------------------------- |
+| `RENDER_DEPLOY_HOOK_URL`                                         | Backend (Render)             |
+| `CLOUDFLARE_PAGES_DEPLOY_HOOK_URL`                               | Frontend (Cloudflare Pages)  |
+
+- Os segredos nunca aparecem no código nem nos logs (a URL é passada por variável de ambiente e não é impressa).
+- Se um secret não existir, o workflow emite um *warning* e **pula apenas aquele deploy** sem falhar o pipeline — dá para configurá-los depois. Se o hook existir mas responder erro, o job falha.
+- **Desative o auto-deploy por push** no Render e no Cloudflare Pages. Caso contrário eles publicam a cada push em paralelo ao CI, e o encadeamento "só publica depois de passar nos gates" deixa de valer. Passo a passo no fim desta seção.
+- O Cloudflare Pages precisa ter a variável `VITE_SENTRY_DSN` (opcional) disponível **no build**, pois ela é embutida no bundle e na CSP.
+
+**Concorrência.** O `concurrency` do workflow cancela execuções antigas em PRs/branches, mas **não em `main`**: lá as execuções ficam em fila (uma rodando + a mais recente aguardando). Assim, um push novo nunca interrompe um `deploy` em andamento no meio (o que deixaria backend e frontend em versões diferentes), e dois deploys nunca se sobrepõem.
+
+**Migrations em produção.** `prisma migrate deploy` roda **no startup do container do backend** (`backend/Dockerfile`: `npx prisma migrate deploy && node dist/src/server.js`). Não há etapa separada de migration. Consequências operacionais:
+
+- migration e startup estão acoplados: **se a migration falhar, a API não sobe** (o Render mantém a versão anterior no ar até o novo deploy ficar saudável, mas o deploy falha);
+- migrations destrutivas ou longas atrasam o startup — prefira migrations aditivas e compatíveis com a versão anterior do código;
+- evite **deploys concorrentes** (dois containers rodando `migrate deploy` ao mesmo tempo): o `concurrency` acima já impede que o CI faça isso, mas evite também disparar deploys manuais em paralelo.
+
+**Passo a passo manual (uma única vez)**
+
+1. Render → serviço do backend → *Settings → Deploy Hook*: crie o hook e salve a URL no secret `RENDER_DEPLOY_HOOK_URL`.
+2. Cloudflare Pages → projeto do frontend → *Settings → Builds & deployments → Deploy hooks*: crie o hook e salve a URL no secret `CLOUDFLARE_PAGES_DEPLOY_HOOK_URL`.
+3. Render → *Settings → Build & Deploy → Auto-Deploy*: **Off**. O deploy passa a ser feito só pelo Deploy Hook disparado pelo GitHub Actions.
+4. Cloudflare Pages → *Settings → Builds → Branch control*: desative os deploys automáticos da branch de produção, mantendo o Deploy Hook (o nome exato da opção pode variar conforme a versão do painel).
+
+### Health checks
+
+Os endpoints já existem e não foram alterados: `GET /health` e `GET /health/db`.
+
+- **Health Check do Render**: use **`/health`**. Ele não depende do banco, então uma oscilação do Neon não reinicia a API.
+- **Monitoramento externo** (uptime monitor, alertas): use `/health/db` se quiser acompanhar também a conectividade com o banco.
+  > O Neon pode ter *cold start* / latência transitória e o `/health/db` pode responder `503` nesses momentos. **Não use `/health/db` como Health Check do Render**: isso pode provocar reinícios indevidos do serviço.
 
 ### RBAC por papel
 
@@ -161,11 +208,85 @@ Não há deploy automático nesta etapa — o CI valida o código, não o public
 
 Leitura (`GET`) desses recursos, e todos os demais módulos (clientes, documentos, pagamentos, notificações, dashboard, auditoria), permanecem acessíveis a qualquer usuário autenticado — são operações auxiliares/operacionais que já faziam parte do fluxo normal de um `ASSISTANT`.
 
+## Testes E2E
+
+Quatro fluxos, em `e2e/`, com Playwright (somente Chromium):
+
+1. **Login** — autenticação pela interface até o dashboard (respeita a troca obrigatória de senha: os usuários do seed não a exigem).
+2. **Criar contrato** — wizard completo (cliente → modelo → informações → revisão) até o contrato criado como rascunho.
+3. **Enviar contrato** — como `LAWYER`, rascunho → *Enviado*, validado também após recarregar a página.
+4. **Registrar pagamento** — parcela pendente → paga, validado também após recarregar.
+
+Os testes são independentes e idempotentes: cada um cria seus próprios dados (cliente/modelo/contrato com nome único por execução, via API quando é só pré-requisito) e não depende da ordem. Os fluxos 2–4 abrem a sessão com um JWT obtido pela API; só o fluxo 1 faz login pela tela.
+
+**Requisitos locais**: Node 20+, PostgreSQL 16 (ex.: `backend/docker-compose.yml`) e `npx playwright install chromium`.
+
+```bash
+# 1. PostgreSQL de teste (isolado do banco de desenvolvimento)
+docker run -d --name lexcontract-e2e-db -p 5433:5432 \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=lexcontract_e2e \
+  postgres:16-alpine
+
+# 2. Backend: migrations + seed + build + start (porta 3333)
+cd backend
+npm ci
+export DATABASE_URL='postgresql://postgres:postgres@localhost:5433/lexcontract_e2e?schema=public'
+export DIRECT_URL="$DATABASE_URL"
+export JWT_SECRET='e2e-only-secret-not-used-anywhere-else-0123456789'
+export CORS_ORIGIN='http://localhost:4173'
+export LOGIN_RATE_LIMIT_MAX=1000   # os testes fazem vários logins do mesmo IP
+npm run db:migrate:deploy
+npm run db:seed
+npm run build && npm start &       # ou `npm run dev` em outro terminal
+cd ..
+
+# 3. Frontend: build apontando para o backend + preview (porta 4173)
+npm ci
+VITE_API_URL=http://localhost:3333 npm run build
+npm run preview -- --port 4173 --strictPort &
+
+# 4. Chromium + testes
+npx playwright install chromium
+npm run test:e2e
+```
+
+URLs diferentes das padrão: `E2E_BASE_URL` (frontend, padrão `http://localhost:4173`) e `E2E_API_URL` (backend, padrão `http://localhost:3333`).
+
+Depuração:
+
+```bash
+npx playwright test --ui              # interface interativa
+npx playwright test --debug           # inspector passo a passo
+npx playwright test --headed          # vê o navegador
+npx playwright show-report            # relatório HTML da última execução
+```
+
+> **Limitação:** os testes E2E **não validam a CSP** de `public/_headers`, pois essa política é aplicada pelo Cloudflare Pages e o `vite preview` local não reproduz esse comportamento de infraestrutura. Não há (e não deve haver) um teste de CSP no Playwright.
+
+## Observabilidade (Sentry)
+
+Captura de **erros** no frontend e no backend, 100% opcional. Sem DSN o Sentry **não é inicializado** e nada é enviado: o desenvolvimento, os testes e o CI funcionam sem configuração.
+
+| Variável           | Onde                        | Descrição                                                           |
+| ------------------- | ---------------------------- | -------------------------------------------------------------------- |
+| `SENTRY_DSN`        | Backend (Render)             | DSN do projeto *LexContract Backend*. Ausente = desativado          |
+| `SENTRY_ENVIRONMENT`| Backend (Render)             | Opcional; assume `NODE_ENV` quando não definida                     |
+| `VITE_SENTRY_DSN`   | Frontend (build, Cloudflare) | DSN do projeto *LexContract Frontend*. Ausente = desativado         |
+
+- Sem Session Replay, sem profiling e sem tracing (`tracesSampleRate: 0`). Upload de source maps **não** é feito nesta etapa.
+- **Backend**: inicializado uma única vez em `backend/src/server.ts` (nunca em `buildApp()`, para não interferir nos testes com `app.inject()`). O error handler global reporta **apenas erros inesperados que viram 500**; `AppError` e 4xx não são enviados. A resposta HTTP e o log continuam idênticos.
+- **Frontend**: inicializado em `src/main.tsx`. Um *Error Boundary* global (`GlobalErrorBoundary`) mostra uma tela de erro amigável, com botão para recarregar, em vez de tela branca.
+- **Privacidade (LGPD)**: sem PII padrão, sem usuário/e-mail/nome, sem cookies, sem `Authorization`/headers e sem body de requisição. (No SDK v11 a opção `sendDefaultPii` foi substituída por `dataCollection`, configurada aqui com tudo desligado.)
+- **Tokens de assinatura nunca chegam ao Sentry**: `/public/signatures/<token>` (backend, via `redactSignatureTokenInUrl`) e `/assinar/<token>` (frontend, `src/lib/redact-signature-token.ts`) viram `[REDACTED]` em URLs de evento, breadcrumbs, contextos e nome de transação (`beforeSend`/`beforeBreadcrumb`).
+- **CSP**: a origem do DSN do frontend é acrescentada **somente** ao `connect-src` e **somente** quando `VITE_SENTRY_DSN` está definido (plugin `securityHeadersApiOrigin`, mesmo mecanismo da origem da API). As demais diretivas não mudam.
+
 ## Estrutura do projeto
 
 ```text
 law-contract-management/
-├── .github/workflows/ci.yml     # pipeline de CI
+├── .github/workflows/ci.yml     # pipeline de CI + deploy
+├── e2e/                          # testes E2E (Playwright)
+├── playwright.config.ts
 ├── Dockerfile                    # imagem de produção do frontend (Node build → Nginx)
 ├── nginx.conf                     # fallback de SPA para o React Router
 ├── public/sw.js                    # Service Worker do Web Push
@@ -202,7 +323,7 @@ O LexContract organiza esse fluxo em torno de um único domínio central — o *
 - **JWT + bcryptjs**: autenticação stateless (sem sessão em banco/Redis), simples de escalar horizontalmente; bcryptjs evita dependência de compilação nativa em diferentes ambientes de build/deploy.
 - **RBAC com `requireRole()` nos `preHandler`s das rotas**, em vez de uma tabela de permissões ou camada de ACL: com apenas três papéis fixos (`ADMIN`, `LAWYER`, `ASSISTANT`) e regras estáveis por domínio, uma tabela de permissões dinâmica adicionaria complexidade sem necessidade real — o princípio do menor privilégio é aplicado diretamente onde o Fastify já intercepta a requisição.
 - **Docker (multi-stage) para as duas aplicações**: o frontend usa Node só para o build do Vite e entrega os estáticos via Nginx (imagem final enxuta, sem runtime Node em produção); o backend usa um estágio de dependências de produção separado do estágio de build, para não carregar `devDependencies` na imagem final.
-- **CI no GitHub Actions com três frentes (frontend, backend, docker)**: cada uma falha independentemente e rápido, e o job de Docker só roda depois que o build/typecheck/testes passam — evita gastar tempo de CI construindo uma imagem de um código já quebrado.
+- **CI no GitHub Actions com quatro frentes (frontend, backend, docker, e2e) + deploy**: cada uma falha independentemente e rápido, e o job de Docker só roda depois que o build/typecheck/testes passam — evita gastar tempo de CI construindo uma imagem de um código já quebrado. O `deploy` só roda após todas e apenas em `main`.
 - **React + Vite no frontend**: mantidos como já estavam (o objetivo desta etapa foi evoluir o backend/infra, não o frontend) — SPA client-side com React Router cobre bem as necessidades de uma aplicação interna de gestão.
 
 ### Segurança e autorização
@@ -213,7 +334,7 @@ Autenticação (provar quem é o usuário, via JWT) e autorização (decidir o q
 
 - **Docker**: `backend/Dockerfile` (multi-stage: dependências → build → dependências de produção → runtime) e `Dockerfile` na raiz para o frontend (multi-stage: build com Node/Vite → Nginx).
 - **Docker Compose**: `backend/docker-compose.yml` sobe PostgreSQL com healthcheck e o backend, aplicando migrations automaticamente antes de iniciar.
-- **GitHub Actions**: pipeline única (`ci.yml`) com jobs `frontend`, `backend` (incluindo um serviço PostgreSQL efêmero para os testes de integração) e `docker`.
+- **GitHub Actions**: pipeline única (`ci.yml`) com jobs `frontend`, `backend` (incluindo um serviço PostgreSQL efêmero para os testes de integração), `docker`, `e2e` (PostgreSQL próprio + Playwright) e `deploy` (Deploy Hooks, só em `main`).
 
 ### Aprendizados
 

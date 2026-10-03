@@ -121,6 +121,11 @@ const envSchema = z.object({
   // Tamanho máximo de upload de um documento, em bytes. Mantido alinhado
   // com o texto já exibido na tela de Documentos ("Máx. 10 MB por arquivo").
   MAX_UPLOAD_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+
+  // Sentry (somente captura de erros). Opcional: sem DSN o Sentry fica DESATIVADO e nada é enviado.
+  // SENTRY_ENVIRONMENT assume NODE_ENV quando ausente (ver transform ao final do schema).
+  SENTRY_DSN: optionalString,
+  SENTRY_ENVIRONMENT: optionalString,
 }).superRefine((config, ctx) => {
   if (config.STORAGE_DRIVER === 'neon-s3') {
     for (const name of NEON_S3_REQUIRED_VARS) {
@@ -146,7 +151,10 @@ const envSchema = z.object({
       }
     }
   }
-});
+}).transform((config) => ({
+  ...config,
+  SENTRY_ENVIRONMENT: config.SENTRY_ENVIRONMENT ?? config.NODE_ENV,
+}));
 
 export type Env = z.infer<typeof envSchema>;
 

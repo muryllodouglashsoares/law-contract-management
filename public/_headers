@@ -2,11 +2,13 @@
 #
 # __API_ORIGIN__ é substituído no `npm run build` pela origem de VITE_API_URL
 # (ver plugin `securityHeadersApiOrigin` em vite.config.ts), para a CSP nunca
-# ficar dessincronizada da URL da API usada pelo bundle.
+# ficar dessincronizada da URL da API usada pelo bundle. O mesmo plugin preenche a origem do
+# Sentry (só com VITE_SENTRY_DSN definido; sem DSN o placeholder é removido).
 #
 # CSP baseada no que o app realmente usa:
 #  - Google Fonts (src/index.css): style-src googleapis + font-src gstatic
 #  - API: connect-src (fetch para VITE_API_URL)
+#  - Sentry (opcional): a origem do VITE_SENTRY_DSN entra no connect-src só quando o DSN existe
 #  - PDF: iframe apontando para Blob URL (ContractPdfPanel) -> frame-src blob:
 #  - Blob/data em imagens; estilos inline (Tailwind/React style={{}}) -> 'unsafe-inline' só em style-src
 #  - Nenhum script inline nem eval: script-src 'self'
@@ -15,7 +17,7 @@
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), accelerometer=(), gyroscope=(), magnetometer=(), interest-cohort=()
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' __API_ORIGIN__; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' __API_ORIGIN__ __SENTRY_ORIGIN__; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 
 # Página pública de aceite eletrônico: o token está na URL, então não pode vazar via
 # Referer nem ser indexada. `!` remove o Referrer-Policy herdado de /* antes de redefini-lo

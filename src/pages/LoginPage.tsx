@@ -79,10 +79,11 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">E-mail</label>
+              <label htmlFor="login-email" className="block text-sm font-medium text-slate-700 mb-1.5">E-mail</label>
               <div className="relative">
                 <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
+                  id="login-email"
                   type="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
@@ -95,7 +96,7 @@ export default function LoginPage() {
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-sm font-medium text-slate-700">Senha</label>
+                <label htmlFor="login-password" className="block text-sm font-medium text-slate-700">Senha</label>
                 <button type="button" className="text-xs font-medium" style={{ color: 'var(--color-accent)' }}>
                   Esqueci a senha
                 </button>
@@ -103,6 +104,7 @@ export default function LoginPage() {
               <div className="relative">
                 <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
@@ -113,6 +115,7 @@ export default function LoginPage() {
                 <button
                   type="button"
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
                   onClick={() => setShowPassword(!showPassword)}
                 >
                   {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}

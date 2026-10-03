@@ -5,11 +5,14 @@ on:
     branches: [main]
   pull_request:
 
-# Cancela execuções anteriores do mesmo branch/PR quando um novo push chega,
-# evitando gastar minutos de CI validando um código já superado.
+# Em PRs/branches, um novo push cancela a execução anterior (evita gastar minutos de CI validando
+# código já superado). Em `main` NÃO cancela: uma execução em andamento pode estar no job `deploy`,
+# e interrompê-lo no meio deixaria backend e frontend em versões diferentes. Em `main` as execuções
+# ficam em fila (1 rodando + a mais recente pendente), então os deploys nunca se sobrepõem — o que
+# também evita `prisma migrate deploy` concorrente (roda no startup do backend).
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -19,7 +22,7 @@ env:
 
 jobs:
   frontend:
-    name: Frontend (build)
+    name: Frontend (typecheck, build)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,6 +37,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Build
         run: npm run build
@@ -113,3 +119,162 @@ jobs:
 
       - name: Build backend image
         run: docker build -t lexcontract-backend:ci ./backend
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Banco PRÓPRIO do E2E (serviço deste job, base `lexcontract_e2e`): nunca compartilhado com o
+    # PostgreSQL de integração do job `backend`.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lexcontract_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lexcontract_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Backend (schema de backend/src/config/env.ts). Sentry NÃO é habilitado no E2E.
+      NODE_ENV: production
+      PORT: '3333'
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/lexcontract_e2e?schema=public
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/lexcontract_e2e?schema=public
+      JWT_SECRET: e2e-only-secret-not-used-anywhere-else-0123456789
+      CORS_ORIGIN: http://localhost:4173
+      PUBLIC_APP_URL: http://localhost:4173
+      LOG_LEVEL: warn
+      # Cada fluxo faz login (UI e API) a partir do mesmo IP: o limite padrão (5/min) derrubaria a suíte.
+      LOGIN_RATE_LIMIT_MAX: '1000'
+      # Frontend e Playwright
+      VITE_API_URL: http://localhost:3333
+      E2E_API_URL: http://localhost:3333
+      E2E_BASE_URL: http://localhost:4173
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Apply migrations and seed (E2E database)
+        working-directory: backend
+        run: |
+          npm run db:migrate:deploy
+          npm run db:seed
+
+      # Mesmo caminho de produção: build + `node dist/src/server.js` (não `tsx watch`).
+      - name: Build and start backend
+        working-directory: backend
+        run: |
+          npm run build
+          nohup npm start > ../backend.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3333/health/db >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "::error::Backend não ficou saudável a tempo"
+          cat ../backend.log
+          exit 1
+
+      - name: Build and serve frontend
+        run: |
+          npm run build
+          nohup npm run preview -- --port 4173 --strictPort > frontend.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:4173/ >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "::error::Frontend não respondeu a tempo"
+          cat frontend.log
+          exit 1
+
+      - name: Cache Playwright Chromium
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Chromium (browser + system dependencies)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      # Com cache, o navegador já está no disco; só as bibliotecas do sistema precisam ser instaladas.
+      - name: Install Chromium system dependencies (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+      - name: Show backend log
+        if: failure()
+        run: tail -n 100 backend.log || true
+
+      # Só em falha: relatório HTML e traces (gravados no primeiro retry em test-results/).
+      - name: Upload Playwright report and traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Deploy encadeado: só depois de TODOS os gates e somente em push para `main` (nunca em PR).
+  # O auto-deploy por push do Render e do Cloudflare Pages deve estar DESATIVADO (ver README),
+  # senão eles publicariam em paralelo ao CI.
+  deploy:
+    name: Deploy (Render + Cloudflare Pages)
+    runs-on: ubuntu-latest
+    needs: [frontend, backend, e2e, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      # Os hooks são segredos: chegam por env (mascarados pelo GitHub) e a URL nunca é impressa.
+      # Secret ausente = aviso e pula (permite configurar depois); hook que falha = job falha.
+      - name: Deploy backend (Render)
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "::warning::RENDER_DEPLOY_HOOK_URL não configurado — deploy do backend ignorado."
+            exit 0
+          fi
+          curl --fail --silent --show-error --retry 2 --max-time 30 -X POST "$DEPLOY_HOOK_URL" -o /dev/null
+          echo "Deploy do backend (Render) disparado."
+
+      - name: Deploy frontend (Cloudflare Pages)
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.CLOUDFLARE_PAGES_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "::warning::CLOUDFLARE_PAGES_DEPLOY_HOOK_URL não configurado — deploy do frontend ignorado."
+            exit 0
+          fi
+          curl --fail --silent --show-error --retry 2 --max-time 30 -X POST "$DEPLOY_HOOK_URL" -o /dev/null
+          echo "Deploy do frontend (Cloudflare Pages) disparado."

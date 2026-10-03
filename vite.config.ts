@@ -363,14 +363,17 @@ function figmaMakeKitPlugin(options: { storiesGlob: string | string[] }): Plugin
 }
 
 /**
- * Substitui __API_ORIGIN__ em dist/_headers (CSP `connect-src`) pela origem de
- * VITE_API_URL. Assim a CSP acompanha a URL da API configurada no build
- * (Cloudflare Pages) em vez de ter uma URL de produção fixa no repositório.
- * O mesmo fallback do api-client (http://localhost:3333) é usado se ausente.
+ * Preenche os placeholders de origem em dist/_headers (CSP `connect-src`):
+ *  - __API_ORIGIN__: origem de VITE_API_URL, para a CSP nunca ficar dessincronizada da URL da
+ *    API usada pelo bundle (Cloudflare Pages). Mesmo fallback do api-client (http://localhost:3333).
+ *  - __SENTRY_ORIGIN__: origem derivada de VITE_SENTRY_DSN, SOMENTE quando o DSN está configurado.
+ *    Sem DSN o placeholder (e o espaço que o precede) é removido e nenhuma origem é adicionada.
+ * Nenhuma outra diretiva da CSP é alterada.
  */
 function securityHeadersApiOrigin(): Plugin {
   let outDir = 'dist'
   let apiUrl = ''
+  let sentryDsn = ''
 
   return {
     name: 'security-headers-api-origin',
@@ -378,6 +381,7 @@ function securityHeadersApiOrigin(): Plugin {
     configResolved(config) {
       outDir = path.resolve(config.root, config.build.outDir)
       apiUrl = (config.env.VITE_API_URL as string | undefined) || 'http://localhost:3333'
+      sentryDsn = ((config.env.VITE_SENTRY_DSN as string | undefined) ?? '').trim()
     },
     closeBundle() {
       const headersFile = path.join(outDir, '_headers')
@@ -391,7 +395,23 @@ function securityHeadersApiOrigin(): Plugin {
       }
 
       const content = fs.readFileSync(headersFile, 'utf8')
-      fs.writeFileSync(headersFile, content.split('__API_ORIGIN__').join(origin))
+      const withApi = content.split('__API_ORIGIN__').join(origin)
+      const withSentry = withApi.split(' __SENTRY_ORIGIN__').join(sentryDsn ? ` ${sentryOrigin(sentryDsn)}` : '')
+      fs.writeFileSync(headersFile, withSentry)
     },
   }
+}
+
+/** Origem (esquema + host[:porta]) de um DSN do Sentry. Genérico: não assume o domínio sentry.io. */
+function sentryOrigin(dsn: string): string {
+  let url: URL
+  try {
+    url = new URL(dsn)
+  } catch {
+    throw new Error('VITE_SENTRY_DSN inválida para a CSP: informe o DSN completo do projeto (https://<chave>@<host>/<id>)')
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error(`VITE_SENTRY_DSN inválida para a CSP: protocolo "${url.protocol}" não suportado`)
+  }
+  return url.origin
 }

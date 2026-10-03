@@ -1,6 +1,7 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
+import { captureUnexpectedError } from '../../config/sentry';
 import { AppError } from '../errors';
 
 interface ErrorBody {
@@ -64,6 +65,8 @@ export function errorHandler(
   // Qualquer outra coisa é inesperada: logar em nível error e nunca
   // expor detalhes internos (stack trace, mensagem de driver, etc.) em produção.
   request.log.error({ err: error }, 'Erro não tratado');
+  // Complementar: só chega aqui o que é 5xx inesperado (AppError e 4xx retornaram acima).
+  captureUnexpectedError(error, request);
 
   const body: ErrorBody = {
     error: {

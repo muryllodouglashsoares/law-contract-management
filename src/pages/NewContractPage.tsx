@@ -205,12 +205,12 @@ export default function NewContractPage() {
             <p className="text-sm mb-5" style={{ color: 'var(--color-muted-foreground)' }}>Preencha os dados que serão inseridos no contrato</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">Valor (R$) *</label>
-                <input value={formData.value} onChange={e => setFormData({...formData, value: e.target.value})} placeholder="0,00" className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} />
+                <label htmlFor="nc-value" className="block text-xs font-medium text-slate-700 mb-1.5">Valor (R$) *</label>
+                <input id="nc-value" value={formData.value} onChange={e => setFormData({...formData, value: e.target.value})} placeholder="0,00" className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">Data de início *</label>
-                <input type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} />
+                <label htmlFor="nc-start" className="block text-xs font-medium text-slate-700 mb-1.5">Data de início *</label>
+                <input id="nc-start" type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1.5">Data de término (opcional)</label>
@@ -224,8 +224,8 @@ export default function NewContractPage() {
                 <input value={formData.deadline} onChange={e => setFormData({...formData, deadline: e.target.value})} placeholder="Ex: 12 meses" className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2" style={{ borderColor: 'var(--color-border)' }} />
               </div>
               <div className="md:col-span-2">
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">Objeto do contrato *</label>
-                <textarea rows={2} value={formData.object} onChange={e => setFormData({...formData, object: e.target.value})} placeholder="Descreva o objeto da prestação de serviços..." className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 resize-none" style={{ borderColor: 'var(--color-border)' }} />
+                <label htmlFor="nc-object" className="block text-xs font-medium text-slate-700 mb-1.5">Objeto do contrato *</label>
+                <textarea id="nc-object" rows={2} value={formData.object} onChange={e => setFormData({...formData, object: e.target.value})} placeholder="Descreva o objeto da prestação de serviços..." className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 resize-none" style={{ borderColor: 'var(--color-border)' }} />
               </div>
               <div className="md:col-span-2">
                 <label className="block text-xs font-medium text-slate-700 mb-1.5">Condições específicas</label>

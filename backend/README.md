@@ -122,6 +122,17 @@ Veja `backend/.env.example` (versionado; o `.gitignore` tem a exceção `!.env.e
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | **sim, se** `neon-s3` | Credenciais do bucket (somente no backend) |
 | `S3_FORCE_PATH_STYLE` | não | Path-style nas URLs S3 (padrão: `true`)             |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | não (**as três juntas**) | Web Push. Vazias = Web Push desativado (notificações internas seguem normais). A privada só existe no backend. Veja [Web Push](#web-push-notificações-do-navegador) |
+| `SENTRY_DSN` | não | DSN do projeto Sentry do backend. Ausente = Sentry **desativado** (nada é enviado; testes/CI não precisam dele). Veja [Sentry](#sentry-captura-de-erros) |
+| `SENTRY_ENVIRONMENT` | não | Nome do ambiente nos eventos do Sentry. Opcional: assume `NODE_ENV` por padrão |
+
+### Sentry (captura de erros)
+
+Opcional e somente para **erros** (sem tracing, profiling ou Replay; `tracesSampleRate: 0`).
+
+- Inicializado **uma única vez** em `src/server.ts` (via `src/config/sentry.ts`), nunca em `buildApp()` — os testes com `app.inject()` não são afetados.
+- O error handler global (`src/shared/http/error-handler.ts`) reporta **apenas erros inesperados que resultam em 500**. `AppError` e 4xx não são enviados; a resposta HTTP (status, `code`, `message`) e o log permanecem iguais.
+- Privacidade (LGPD): sem usuário, cookies, `Authorization`/headers, body ou query string. O token de aceite eletrônico é mascarado por `redactSignatureTokenInUrl()` (`/public/signatures/[REDACTED]`) em URL do evento, breadcrumbs e nome de transação.
+- Source maps não são enviados nesta etapa.
 
 ### Rate limit do login
 
@@ -347,8 +358,8 @@ Todas as respostas de erro seguem o formato:
 
 | Método | Rota          | Autenticação | Descrição                                 |
 | ------ | ------------- | :----------: | ------------------------------------------ |
-| GET    | `/health`      | não          | `{ "status": "ok" }`                        |
-| GET    | `/health/db`   | não          | Verifica também a conectividade com o banco  |
+| GET    | `/health`      | não          | `{ "status": "ok" }` — **use este como Health Check do Render** (não depende do banco) |
+| GET    | `/health/db`   | não          | Verifica também a conectividade com o banco — para monitoramento externo. O Neon pode ter *cold start* e responder `503` transitoriamente: **não use como Health Check do Render** (reinícios indevidos) |
 | POST   | `/auth/login`  | não          | `{ email, password }` → `{ accessToken, user }` |
 | GET    | `/auth/me`     | sim (JWT)    | Dados do usuário autenticado                     |
 | GET    | `/users/me`    | sim (JWT)    | Dados do usuário autenticado                     |

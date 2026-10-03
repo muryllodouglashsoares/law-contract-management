@@ -1,6 +1,10 @@
 import { buildApp } from './app';
 import { env } from './config/env';
+import { closeSentry, initSentry } from './config/sentry';
 import { prisma } from './shared/database/prisma';
+
+// Uma única vez, antes de subir a API (nunca dentro de buildApp()). No-op sem SENTRY_DSN.
+initSentry();
 
 async function start(): Promise<void> {
   const app = buildApp();
@@ -9,6 +13,7 @@ async function start(): Promise<void> {
     app.log.info(`Recebido ${signal}, encerrando servidor...`);
     await app.close();
     await prisma.$disconnect();
+    await closeSentry();
     process.exit(0);
   };
 

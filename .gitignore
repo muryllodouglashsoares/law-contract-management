@@ -19,3 +19,8 @@ logs/
 # beside it.
 /.plugins/
 /.opencode-skills/
+
+# Playwright (E2E)
+/playwright-report/
+/test-results/
+/blob-report/
