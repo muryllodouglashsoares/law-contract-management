@@ -4,7 +4,7 @@ import { CONTRACT_STATUS_TO_API } from '../domain/status-map';
 import { toMoneyNumber } from './money';
 
 export type ContractWithRelations = Contract & {
-  client: { id: string; name: string; document: string; email: string };
+  client: { id: string; name: string; document: string; email: string; phone: string | null };
   template: { id: string; name: string };
   responsible: { id: string; name: string };
   versions: ContractVersion[];
@@ -22,7 +22,8 @@ export interface PublicContract {
   conditions: string | null;
   createdAt: string;
   updatedAt: string;
-  client: { id: string; name: string; document: string; email: string };
+  /** `phone` alimenta o botão "Enviar por WhatsApp" (o frontend não faz outra requisição para buscá-lo). */
+  client: { id: string; name: string; document: string; email: string; phone: string | null };
   template: { id: string; name: string };
   responsible: { id: string; name: string };
   currentVersion: { versionNumber: number; content: string; createdAt: string } | null;
@@ -43,7 +44,13 @@ export function toPublicContract(contract: ContractWithRelations): PublicContrac
     conditions: contract.conditions,
     createdAt: contract.createdAt.toISOString(),
     updatedAt: contract.updatedAt.toISOString(),
-    client: contract.client,
+    client: {
+      id: contract.client.id,
+      name: contract.client.name,
+      document: contract.client.document,
+      email: contract.client.email,
+      phone: contract.client.phone ?? null,
+    },
     template: contract.template,
     responsible: contract.responsible,
     currentVersion: currentVersion

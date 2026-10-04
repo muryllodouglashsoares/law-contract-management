@@ -1,0 +1,102 @@
+name: Contract renewal cron
+
+# Cron diário dos alertas de vencimento de contratos. Workflow INDEPENDENTE do CI (ci.yml):
+# não usa `needs`, não depende de jobs de build/teste e roda mesmo que o último CI tenha falhado.
+#
+#   GitHub Actions → POST /internal/jobs/contract-renewal-alerts → CRON_SECRET →
+#   ContractRenewalJobService → Notification → Web Push
+#
+# Secrets necessários (Settings → Secrets and variables → Actions → Secrets):
+#   BACKEND_URL  URL pública (https) do backend, sem barra final, ex.: https://api.seudominio.com.br
+#   CRON_SECRET  mesmo valor da variável CRON_SECRET configurada no backend
+#
+# A idempotência é do backend (renewalAlertForEndDate + UPDATE condicional): reexecutar o
+# workflow no mesmo dia não duplica notificações nem pushes.
+
+on:
+  schedule:
+    # 11:00 UTC = 08:00 em Brasília (BRT, UTC-3, sem horário de verão). O GitHub pode atrasar
+    # execuções agendadas em alguns minutos em horários de pico.
+    - cron: '0 11 * * *'
+  # Execução manual: Actions → Contract renewal cron → Run workflow.
+  workflow_dispatch:
+
+# O workflow só faz uma requisição HTTP: não precisa de nenhuma permissão no repositório.
+permissions: {}
+
+# Nunca duas execuções ao mesmo tempo (cron + manual). Sem cancelar a que está em andamento.
+concurrency:
+  group: contract-renewal-cron
+  cancel-in-progress: false
+
+jobs:
+  renewal-alerts:
+    name: Run contract renewal alerts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Os secrets chegam por `env` (mascarados pelo GitHub). Nada é impresso: nem a URL, nem o
+      # CRON_SECRET. O header de autorização vai por stdin (`--config -`), então o segredo não
+      # aparece na linha de comando do processo.
+      - name: Call POST /internal/jobs/contract-renewal-alerts
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          # Remove espaços, quebras de linha e aspas coladas junto com o secret.
+          BACKEND_URL="$(printf '%s' "${BACKEND_URL:-}" | tr -d '[:space:]"'"'"'')"
+          CRON_SECRET="$(printf '%s' "${CRON_SECRET:-}" | tr -d '[:space:]"'"'"'')"
+
+          if [ -z "$BACKEND_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::Secrets BACKEND_URL e CRON_SECRET são obrigatórios (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          case "$BACKEND_URL" in
+            https://*) ;;
+            *) echo "::error::O secret BACKEND_URL deve ser uma URL https:// (somente a URL do backend)."; exit 1 ;;
+          esac
+
+          endpoint="${BACKEND_URL%/}/internal/jobs/contract-renewal-alerts"
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+
+          # Timeouts generosos: a instância gratuita do Render "dorme" e pode levar ~1 min para acordar.
+          # Repetir é seguro: o job é idempotente no banco. 4xx (ex.: 401) não é repetido.
+          curl_status=0
+          http_code="$(
+            printf 'header = "Authorization: Bearer %s"\n' "$CRON_SECRET" |
+              curl --silent --show-error --fail-with-body \
+                --request POST \
+                --header 'Accept: application/json' \
+                --connect-timeout 30 --max-time 120 \
+                --retry 3 --retry-delay 15 --retry-connrefused \
+                --config - \
+                --output "$response_file" \
+                --write-out '%{http_code}' \
+                "$endpoint"
+          )" || curl_status=$?
+
+          if [ "$curl_status" -ne 0 ]; then
+            echo "::error::O job de renovação falhou (curl exit $curl_status, HTTP ${http_code:-000})."
+            # O corpo de erro do backend é só { statusCode, message }: seguro para exibir.
+            head -c 500 "$response_file" || true
+            echo
+            exit 1
+          fi
+
+          # Proteção extra: um 200 que não seja a resposta do job (ex.: página de manutenção) é falha.
+          if ! jq -e '.status == "ok"' "$response_file" >/dev/null 2>&1; then
+            echo "::error::Resposta inesperada do backend (HTTP $http_code): o corpo não contém status \"ok\"."
+            exit 1
+          fi
+
+          summary="$(jq -r '"processed=\(.processed) notified=\(.notified) skipped=\(.skipped)"' "$response_file")"
+          echo "Job de renovação concluído (HTTP $http_code): $summary"
+          {
+            echo "### Alertas de renovação de contratos"
+            echo
+            echo "- Resultado: \`$summary\`"
+          } >> "$GITHUB_STEP_SUMMARY"

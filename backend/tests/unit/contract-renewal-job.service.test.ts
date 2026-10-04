@@ -7,6 +7,8 @@ import {
   daysUntil,
 } from '../../src/modules/contract-renewal/contract-renewal-job.service';
 
+import { ALL_USERS, TEAM, makeFakeUserDb, type FakeUser } from './helpers-push-recipients';
+
 const NOW = new Date('2026-10-01T11:00:00.000Z');
 
 function day(offset: number): Date {
@@ -18,7 +20,7 @@ function makeContract(overrides: Record<string, unknown> = {}) {
     id: 'c-1',
     number: 102,
     officeId: 'office-1',
-    responsibleId: 'user-1',
+    responsibleId: 'lawyer-1',
     endDate: day(27),
     updatedAt: new Date('2026-09-01T00:00:00Z'),
     renewalAlertForEndDate: null,
@@ -27,19 +29,27 @@ function makeContract(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeService(contracts: ReturnType<typeof makeContract>[], claimCount = 1, withPush = false) {
+function makeService(
+  contracts: ReturnType<typeof makeContract>[],
+  claimCount = 1,
+  withPush = false,
+  users: FakeUser[] = ALL_USERS,
+) {
   const findMany = vi.fn().mockResolvedValueOnce(contracts).mockResolvedValue([]);
   const updateMany = vi.fn().mockResolvedValue({ count: claimCount });
   const notificationCreate = vi.fn().mockResolvedValue({});
   const auditCreate = vi.fn().mockResolvedValue({});
   const tx = { contract: { updateMany }, notification: { create: notificationCreate }, auditLog: { create: auditCreate } };
+  const userDb = makeFakeUserDb(users);
   const prisma = {
     contract: { findMany },
+    user: userDb.prisma.user,
     $transaction: vi.fn(async (cb: (t: typeof tx) => unknown) => cb(tx)),
   } as unknown as ConstructorParameters<typeof ContractRenewalJobService>[0];
-  const sendToUser = vi.fn().mockResolvedValue({ sent: 1, removed: 0, failed: 0 });
-  const service = new ContractRenewalJobService(prisma, withPush ? { sendToUser } : undefined);
-  return { service, findMany, updateMany, notificationCreate, auditCreate, sendToUser };
+  const sendToUsers = vi.fn().mockResolvedValue({ sent: 1, removed: 0, failed: 0 });
+  const sendToUser = vi.fn();
+  const service = new ContractRenewalJobService(prisma, withPush ? { sendToUser, sendToUsers } : undefined);
+  return { service, findMany, updateMany, notificationCreate, auditCreate, sendToUsers, sendToUser, userFindMany: userDb.findMany };
 }
 
 describe('ContractRenewalJobService (unit)', () => {
@@ -62,7 +72,7 @@ describe('ContractRenewalJobService (unit)', () => {
     const data = notificationCreate.mock.calls[0]?.[0].data;
     expect(data).toMatchObject({
       officeId: 'office-1',
-      userId: 'user-1',
+      userId: 'lawyer-1',
       type: 'WARNING',
       title: 'Contrato próximo do vencimento',
       description: 'O contrato #102 de João da Silva termina em 28/10/2026 e está a 27 dias do vencimento.',
@@ -118,42 +128,79 @@ describe('ContractRenewalJobService (unit)', () => {
 });
 
 describe('ContractRenewalJobService — Web Push', () => {
-  it('envia 1 push ao responsável junto com a Notification, sem nome de cliente', async () => {
-    const { service, sendToUser, notificationCreate } = makeService([makeContract({ endDate: day(7) })], 1, true);
+  const MESSAGE = {
+    type: 'CONTRACT_RENEWAL',
+    title: 'Contrato próximo do vencimento',
+    body: 'O contrato #102 vence em 7 dias.',
+    url: '/contratos/c-1',
+    tag: 'renewal:c-1',
+  };
+
+  it('envia 1 fan-out ao responsável + ADMINs ativos do escritório, junto com a Notification interna (só do responsável)', async () => {
+    const { service, sendToUsers, sendToUser, notificationCreate } = makeService([makeContract({ endDate: day(7) })], 1, true);
     await service.run(NOW);
 
+    // Notification interna continua SÓ para o responsável.
     expect(notificationCreate).toHaveBeenCalledTimes(1);
-    expect(sendToUser).toHaveBeenCalledTimes(1);
-    expect(sendToUser).toHaveBeenCalledWith(
-      { officeId: 'office-1', userId: 'user-1' },
-      {
-        type: 'CONTRACT_RENEWAL',
-        title: 'Contrato próximo do vencimento',
-        body: 'O contrato #102 vence em 7 dias.',
-        url: '/contratos/c-1',
-        tag: 'renewal:c-1',
-      },
-    );
-    expect(JSON.stringify(sendToUser.mock.calls)).not.toContain('João');
+    expect(notificationCreate.mock.calls[0]?.[0].data.userId).toBe('lawyer-1');
+
+    expect(sendToUsers).toHaveBeenCalledTimes(1);
+    expect(sendToUser).not.toHaveBeenCalled();
+    const [recipients, message] = sendToUsers.mock.calls[0] as [{ officeId: string; userId: string }[], unknown];
+    expect(recipients[0]).toEqual({ officeId: 'office-1', userId: 'lawyer-1' });
+    expect(recipients.map((r) => r.userId).sort()).toEqual(['admin-1', 'admin-2', 'lawyer-1']);
+    expect(message).toEqual(MESSAGE);
+  });
+
+  it('payload continua curto e sem dados sensíveis (nem nome de cliente)', async () => {
+    const { service, sendToUsers } = makeService([makeContract({ endDate: day(7) })], 1, true);
+    await service.run(NOW);
+    expect(JSON.stringify(sendToUsers.mock.calls)).not.toContain('João');
+  });
+
+  it('responsável ADMIN não aparece duplicado nos destinatários', async () => {
+    const { service, sendToUsers } = makeService([makeContract({ responsibleId: 'admin-1' })], 1, true);
+    await service.run(NOW);
+
+    const recipients = (sendToUsers.mock.calls[0] as [{ userId: string }[]])[0].map((r) => r.userId);
+    expect(recipients.filter((id) => id === 'admin-1')).toHaveLength(1);
+    expect(recipients.sort()).toEqual(['admin-1', 'admin-2']);
+  });
+
+  it('ADMIN inativo e ADMIN de outro escritório ficam de fora', async () => {
+    const { service, sendToUsers } = makeService([makeContract()], 1, true);
+    await service.run(NOW);
+
+    const recipients = (sendToUsers.mock.calls[0] as [{ userId: string }[]])[0].map((r) => r.userId);
+    expect(recipients).not.toContain(TEAM.adminInactive!.id);
+    expect(recipients).not.toContain(TEAM.otherOfficeAdmin!.id);
+    expect(recipients).not.toContain(TEAM.assistant!.id);
   });
 
   it('NÃO envia push quando outra execução já reivindicou o contrato (count = 0)', async () => {
-    const { service, sendToUser } = makeService([makeContract()], 0, true);
+    const { service, sendToUsers, userFindMany } = makeService([makeContract()], 0, true);
     await service.run(NOW);
-    expect(sendToUser).not.toHaveBeenCalled();
+    expect(sendToUsers).not.toHaveBeenCalled();
+    expect(userFindMany).not.toHaveBeenCalled();
   });
 
   it('NÃO envia push quando já foi alertado para o mesmo endDate (reexecução do cron)', async () => {
-    const { service, sendToUser } = makeService([makeContract({ renewalAlertForEndDate: day(27) })], 1, true);
+    const { service, sendToUsers } = makeService([makeContract({ renewalAlertForEndDate: day(27) })], 1, true);
     await service.run(NOW);
-    expect(sendToUser).not.toHaveBeenCalled();
+    expect(sendToUsers).not.toHaveBeenCalled();
   });
 
   it('NÃO envia push se a transação falhar (rollback)', async () => {
-    const { service, sendToUser, notificationCreate } = makeService([makeContract()], 1, true);
+    const { service, sendToUsers, notificationCreate } = makeService([makeContract()], 1, true);
     notificationCreate.mockRejectedValue(new Error('db error'));
     await expect(service.run(NOW)).rejects.toThrow('db error');
-    expect(sendToUser).not.toHaveBeenCalled();
+    expect(sendToUsers).not.toHaveBeenCalled();
+  });
+
+  it('falha do push NÃO quebra o job: o alerta continua contado como enviado', async () => {
+    const { service, sendToUsers } = makeService([makeContract()], 1, true);
+    sendToUsers.mockRejectedValue(new Error('push down'));
+    await expect(service.run(NOW)).resolves.toEqual({ processed: 1, notified: 1, skipped: 0 });
   });
 
   it('funciona normalmente sem Web Push configurado', async () => {

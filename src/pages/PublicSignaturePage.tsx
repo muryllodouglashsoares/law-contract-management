@@ -3,7 +3,9 @@ import type { FormEvent, ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
 import { AlertCircle, CheckCircle2, Clock, Scale, ShieldCheck, XCircle } from 'lucide-react';
 import { ApiError } from '../lib/api-client';
+import { formatCpfOrCnpj } from '../lib/br-document';
 import { formatDateOnly } from '../lib/contract-dates';
+import { buildSignPayload, evaluateSignatureForm } from '../lib/signature-form';
 import { publicSignaturesService } from '../services/publicSignatures';
 import type { PublicSignatureResult, PublicSignatureView } from '../types/api';
 
@@ -73,6 +75,10 @@ export default function PublicSignaturePage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const form = evaluateSignatureForm({ signerName, signerDocument, consent });
+  const documentTouched = form.document.status !== 'empty';
+  const documentInvalid = form.document.status === 'invalid-cpf' || form.document.status === 'invalid-cnpj';
+
   // A página contém um token na URL: sem indexação e sem enviar Referer a terceiros.
   useEffect(() => {
     const robots = document.createElement('meta');
@@ -117,13 +123,17 @@ export default function PublicSignaturePage() {
       return;
     }
 
+    // Só dígitos vão para o backend (sem máscara/pontuação). O backend revalida tudo: esta
+    // checagem existe apenas para melhorar a experiência.
+    const payload = buildSignPayload({ signerName, signerDocument, consent });
+    if (!payload) {
+      setFormError(form.document.message ?? 'Confira o nome e o CPF/CNPJ informados.');
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const result = await publicSignaturesService.sign(token, {
-        signerName: signerName.trim(),
-        signerDocument: signerDocument.trim(),
-        consent: true,
-      });
+      const result = await publicSignaturesService.sign(token, payload);
       setState({ kind: 'signed', result });
     } catch (error) {
       if (error instanceof ApiError && error.status === 400) {
@@ -284,13 +294,30 @@ export default function PublicSignaturePage() {
               <input
                 id="signer-document"
                 value={signerDocument}
-                onChange={(e) => setSignerDocument(e.target.value)}
+                onChange={(e) => setSignerDocument(formatCpfOrCnpj(e.target.value))}
                 inputMode="numeric"
-                maxLength={32}
+                autoComplete="off"
+                placeholder="000.000.000-00 ou 00.000.000/0000-00"
+                maxLength={18}
                 required
+                aria-invalid={documentInvalid}
+                aria-describedby="signer-document-feedback"
                 className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2"
-                style={{ borderColor: 'var(--color-border)' }}
+                style={{
+                  borderColor: documentInvalid ? '#DC2626' : form.document.valid ? '#059669' : 'var(--color-border)',
+                }}
               />
+              <p
+                id="signer-document-feedback"
+                role={documentInvalid ? 'alert' : undefined}
+                className="mt-1.5 text-xs flex items-center gap-1"
+                style={{ color: form.document.valid ? '#059669' : documentInvalid ? '#DC2626' : 'var(--color-muted-foreground)' }}
+              >
+                {form.document.valid && (<><CheckCircle2 size={12} /> {form.document.digits.length === 11 ? 'CPF válido' : 'CNPJ válido'}</>)}
+                {documentInvalid && (<><XCircle size={12} /> {form.document.message}</>)}
+                {form.document.status === 'incomplete' && (<>Documento incompleto — {form.document.message}.</>)}
+                {!documentTouched && <>Digite apenas números; a formatação é automática.</>}
+              </p>
             </div>
           </div>
 
@@ -301,7 +328,7 @@ export default function PublicSignaturePage() {
 
           <button
             type="submit"
-            disabled={submitting || !consent || signerName.trim().length < 3 || signerDocument.trim().length === 0}
+            disabled={submitting || !form.canSubmit}
             className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-white rounded-lg hover:opacity-90 disabled:opacity-40"
             style={{ backgroundColor: 'var(--color-primary)' }}
           >

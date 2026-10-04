@@ -98,6 +98,103 @@ describe('PushService.sendToUser', () => {
   });
 });
 
+describe('PushService.sendToUsers (fan-out)', () => {
+  const ADMIN = { officeId: 'office-1', userId: 'admin-1' };
+  const LAWYER = { officeId: 'office-1', userId: 'user-1' };
+
+  it('consulta TODOS os destinatários de uma vez, casando officeId + userId, só usuários ativos', async () => {
+    const { service, findMany } = makeService({ subs: [sub('a'), sub('b'), sub('c')] });
+    const result = await service.sendToUsers([LAWYER, ADMIN], MESSAGE);
+
+    expect(result).toEqual({ sent: 3, removed: 0, failed: 0 });
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany.mock.calls[0]?.[0].where).toEqual({
+      OR: [
+        { userId: 'user-1', officeId: 'office-1' },
+        { userId: 'admin-1', officeId: 'office-1' },
+      ],
+      user: { status: 'ACTIVE' },
+    });
+  });
+
+  it('deduplica por usuário: o mesmo userId repetido não multiplica a consulta nem o envio', async () => {
+    const { service, findMany, sender } = makeService({ subs: [sub('a'), sub('b')] });
+    const result = await service.sendToUsers([LAWYER, { ...LAWYER }, LAWYER], MESSAGE);
+
+    // 1 destinatário único = mesmo formato de consulta do sendToUser.
+    expect(findMany.mock.calls[0]?.[0].where).toEqual({ userId: 'user-1', officeId: 'office-1', user: { status: 'ACTIVE' } });
+    expect(result.sent).toBe(2);
+    expect((sender as { send: ReturnType<typeof vi.fn> }).send).toHaveBeenCalledTimes(2);
+  });
+
+  it('o mesmo userId em escritórios diferentes NÃO é deduplicado (são pares distintos)', async () => {
+    const { service, findMany } = makeService({ subs: [] });
+    await service.sendToUsers([LAWYER, { officeId: 'office-2', userId: 'user-1' }], MESSAGE);
+    expect(findMany.mock.calls[0]?.[0].where.OR).toHaveLength(2);
+  });
+
+  it('usuário com vários dispositivos: todas as subscriptions de todos os destinatários recebem', async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const subs = ['lawyer-pc', 'lawyer-phone', 'admin-pc', 'admin-notebook', 'admin-phone'].map(sub);
+    const { service } = makeService({ subs, sender: { send } });
+
+    const result = await service.sendToUsers([LAWYER, ADMIN], MESSAGE);
+
+    expect(result).toEqual({ sent: 5, removed: 0, failed: 0 });
+    expect(send.mock.calls.map((call) => call[0].endpoint).sort()).toEqual(subs.map((s) => s.endpoint).sort());
+  });
+
+  it('remove só as subscriptions 404/410, de qualquer destinatário, e mantém as válidas', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('gone'), { statusCode: 410 }))
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error('nf'), { statusCode: 404 }));
+    const { service, deleteMany } = makeService({ subs: [sub('a'), sub('b'), sub('c')], sender: { send } });
+
+    const result = await service.sendToUsers([LAWYER, ADMIN], MESSAGE);
+
+    expect(result).toEqual({ sent: 1, removed: 2, failed: 0 });
+    expect(deleteMany).toHaveBeenCalledTimes(1);
+    expect(deleteMany.mock.calls[0]?.[0].where.id.in).toEqual(['a', 'c']);
+  });
+
+  it('uma falha transitória num dispositivo não impede o envio aos demais', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('boom'), { statusCode: 500 }))
+      .mockResolvedValue(undefined);
+    const { service, deleteMany } = makeService({ subs: [sub('a'), sub('b'), sub('c')], sender: { send } });
+
+    await expect(service.sendToUsers([LAWYER, ADMIN], MESSAGE)).resolves.toEqual({ sent: 2, removed: 0, failed: 1 });
+    expect(deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('lista vazia não consulta o banco; Web Push desativado é no-op; banco fora do ar não lança', async () => {
+    const empty = makeService({ subs: [sub('a')] });
+    await expect(empty.service.sendToUsers([], MESSAGE)).resolves.toEqual({ sent: 0, removed: 0, failed: 0 });
+    expect(empty.findMany).not.toHaveBeenCalled();
+
+    const off = makeService({ sender: null });
+    await expect(off.service.sendToUsers([LAWYER, ADMIN], MESSAGE)).resolves.toEqual({ sent: 0, removed: 0, failed: 0 });
+    expect(off.findMany).not.toHaveBeenCalled();
+
+    const down = makeService({ subs: [sub('a')] });
+    down.findMany.mockRejectedValue(new Error('db down'));
+    await expect(down.service.sendToUsers([LAWYER, ADMIN], MESSAGE)).resolves.toEqual({ sent: 0, removed: 0, failed: 0 });
+  });
+
+  it('o payload é o mesmo para todos e não carrega dados além de type/title/body/url/tag', async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const { service } = makeService({ subs: [sub('a'), sub('b')], sender: { send } });
+    await service.sendToUsers([LAWYER, ADMIN], { ...MESSAGE, tag: 'signed:c-1' });
+
+    const payloads = send.mock.calls.map((call) => JSON.parse(call[1]));
+    expect(payloads[0]).toEqual(payloads[1]);
+    expect(Object.keys(payloads[0]).sort()).toEqual(['body', 'tag', 'title', 'type', 'url']);
+  });
+});
+
 describe('PushService — gerenciamento', () => {
   const input = { endpoint: 'https://fcm.googleapis.com/fcm/send/x', p256dh: 'p', auth: 'a' };
 

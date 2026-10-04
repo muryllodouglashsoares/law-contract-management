@@ -13,7 +13,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
+    // Inclui os testes das funções puras do frontend (src/**/*.test.ts, na raiz do repositório): o
+    // frontend não tem runner próprio, então reaproveitamos o vitest do backend (sem nova dependência).
+    // Esses arquivos usam os globais do vitest (globals: true) e são excluídos do tsc do frontend.
+    include: ['tests/**/*.test.ts', '../src/**/*.test.ts'],
     testTimeout: 15000,
     hookTimeout: 15000,
     // Roda os arquivos de teste sequencialmente: os testes de integração

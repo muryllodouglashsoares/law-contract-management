@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { AlertCircle, Check, Copy, Link2, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Check, Copy, Link2, MessageCircle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toErrorMessage, useApiQuery } from '../hooks/useApiQuery';
+import { buildSignatureWhatsAppMessage, buildWhatsAppUrl } from '../lib/whatsapp';
 import { contractsService } from '../services/contracts';
 import type { ContractStatusApi, SignatureLink, SignatureLinkState } from '../types/api';
 
@@ -20,7 +21,10 @@ function formatDateTime(iso: string): string {
 
 interface Props {
   contractId: string;
+  contractNumber: number;
   contractStatus: ContractStatusApi;
+  /** Telefone do cliente (cadastro). Usado só para abrir o WhatsApp com a mensagem pronta. */
+  clientPhone: string | null;
 }
 
 /**
@@ -28,7 +32,7 @@ interface Props {
  * não é assinatura digital ICP-Brasil). Visível só para ADMIN/LAWYER, como conveniência
  * de UX: a autorização real é do backend (403 para os demais papéis).
  */
-export default function ContractSignaturePanel({ contractId, contractStatus }: Props) {
+export default function ContractSignaturePanel({ contractId, contractNumber, contractStatus, clientPhone }: Props) {
   const { user } = useAuth();
   const canManage = user?.role === 'ADMIN' || user?.role === 'LAWYER';
 
@@ -60,6 +64,17 @@ export default function ContractSignaturePanel({ contractId, contractStatus }: P
     } finally {
       setGenerating(false);
     }
+  }
+
+  // Só abre o WhatsApp (wa.me) com a mensagem preenchida: nada é enviado pelo sistema, não há
+  // requisição ao backend e o link/estado da assinatura não mudam. O usuário confirma o envio no app.
+  const whatsappUrl = link
+    ? buildWhatsAppUrl(clientPhone, buildSignatureWhatsAppMessage({ contractNumber, url: link.url }))
+    : null;
+
+  function sendByWhatsApp() {
+    if (!whatsappUrl) return;
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
   }
 
   async function copy() {
@@ -120,6 +135,23 @@ export default function ContractSignaturePanel({ contractId, contractStatus }: P
             <button onClick={copy} className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border rounded-lg bg-white hover:bg-slate-50 text-slate-700" style={{ borderColor: 'var(--color-border)' }}>
               {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copiado' : 'Copiar'}
             </button>
+          </div>
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={sendByWhatsApp}
+              disabled={!whatsappUrl}
+              title={whatsappUrl ? undefined : 'O cliente não possui um telefone válido cadastrado'}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border rounded-lg bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ borderColor: 'var(--color-border)' }}
+            >
+              <MessageCircle size={13} /> Enviar por WhatsApp
+            </button>
+            {!whatsappUrl && (
+              <span className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>
+                O cliente não possui telefone válido cadastrado. Atualize o cadastro ou copie o link.
+              </span>
+            )}
           </div>
           <p className="text-xs mt-2" style={{ color: 'var(--color-muted-foreground)' }}>
             Versão {link.versionNumber} · uso único · expira em {formatDateTime(link.expiresAt)}. Este link só é exibido agora;

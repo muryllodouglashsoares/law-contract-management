@@ -11,20 +11,21 @@ import {
 } from '../../shared/security/signature-hash';
 import { generatePublicToken, hashPublicToken, sha256OfString } from '../../shared/security/token';
 import { toMoneyNumber } from '../../shared/utils/money';
+import { notifyPushEvent } from '../notifications/push-recipients';
 import { PUSH_EVENT_TYPES, type PushNotifier } from '../notifications/push.types';
 import { maskDocument } from '../../shared/utils/br-document';
 import type { SignContractBody } from './contract-signature.schemas';
 
 type PrismaDeps = Pick<
   PrismaClient,
-  'contract' | 'contractPublicSignature' | 'notification' | 'auditLog' | '$transaction'
+  'contract' | 'contractPublicSignature' | 'notification' | 'auditLog' | 'user' | '$transaction'
 >;
 
 export interface SignatureServiceConfig {
   /** Origem do frontend (sem barra final). Nunca derivada do header Host. */
   publicAppUrl: string | undefined;
   expirationHours: number;
-  /** Web Push opcional para o responsável quando o contrato é assinado. */
+  /** Web Push opcional (responsável + ADMINs, conforme a política central) quando o contrato é assinado. */
   push?: PushNotifier;
 }
 
@@ -269,20 +270,21 @@ export class ContractSignatureService {
       });
     });
 
-    // Depois do commit e sem aguardar: quem assina pelo link público não espera o serviço de
-    // push do navegador. sendToUser não lança; o catch é só uma rede de segurança.
-    this.config.push
-      ?.sendToUser(
-        { officeId: sig.officeId, userId: sig.contract.responsibleId },
-        {
-          type: PUSH_EVENT_TYPES.CONTRACT_SIGNED,
-          title: 'Contrato assinado',
-          body: `O contrato #${sig.contract.number} foi assinado pelo cliente.`,
-          url: `/contratos/${sig.contractId}`,
-          tag: `signed:${sig.contractId}`,
-        },
-      )
-      .catch(() => undefined);
+    // Depois do commit e sem aguardar: quem assina pelo link público não espera a consulta de
+    // destinatários nem o serviço de push do navegador. notifyPushEvent nunca lança; o catch é
+    // só uma rede de segurança contra unhandled rejection. O push NÃO entra na transação acima.
+    void notifyPushEvent(
+      { prisma: this.prisma, push: this.config.push },
+      PUSH_EVENT_TYPES.CONTRACT_SIGNED,
+      { officeId: sig.officeId, responsibleId: sig.contract.responsibleId },
+      {
+        type: PUSH_EVENT_TYPES.CONTRACT_SIGNED,
+        title: 'Contrato assinado',
+        body: `O contrato #${sig.contract.number} foi assinado pelo cliente.`,
+        url: `/contratos/${sig.contractId}`,
+        tag: `signed:${sig.contractId}`,
+      },
+    ).catch(() => undefined);
 
     return {
       signed: true as const,

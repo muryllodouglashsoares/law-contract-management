@@ -155,6 +155,9 @@ jobs:
       LOG_LEVEL: warn
       # Cada fluxo faz login (UI e API) a partir do mesmo IP: o limite padrão (5/min) derrubaria a suíte.
       LOGIN_RATE_LIMIT_MAX: '1000'
+      # Senha dos usuários do seed (banco efêmero do runner; valor descartável, sem relação com produção).
+      # Lida pelo `npm run db:seed` (backend) e pelos testes Playwright (e2e/helpers.ts).
+      SEED_PASSWORD: e2e-only-seed-password-0123456789
       # Frontend e Playwright
       VITE_API_URL: http://localhost:3333
       E2E_API_URL: http://localhost:3333

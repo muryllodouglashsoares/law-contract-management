@@ -139,12 +139,31 @@ export class PushService implements PushNotifier {
 
   /** Envia a todos os dispositivos de um usuário ATIVO do escritório. Nunca lança. */
   async sendToUser(recipient: PushRecipient, message: PushMessage): Promise<PushSendResult> {
+    return this.sendToUsers([recipient], message);
+  }
+
+  /**
+   * Fan-out para vários usuários: deduplica por `officeId + userId` (um usuário que apareça por
+   * mais de um motivo — ex.: responsável que também é ADMIN — recebe UMA vez por dispositivo),
+   * busca as subscriptions de todos em uma consulta, envia a todos os dispositivos e remove as
+   * inválidas (404/410). Só usuários ATIVOS, sempre casando o par officeId + userId. Nunca lança.
+   */
+  async sendToUsers(recipients: PushRecipient[], message: PushMessage): Promise<PushSendResult> {
     const result: PushSendResult = { sent: 0, removed: 0, failed: 0 };
     if (!this.sender) return result;
 
     try {
+      const targets = dedupeRecipients(recipients);
+      if (targets.length === 0) return result;
+
+      const [only] = targets;
       const subscriptions = await this.prisma.pushSubscription.findMany({
-        where: { userId: recipient.userId, officeId: recipient.officeId, user: { status: 'ACTIVE' } },
+        where: {
+          ...(targets.length === 1 && only
+            ? { userId: only.userId, officeId: only.officeId }
+            : { OR: targets.map((target) => ({ userId: target.userId, officeId: target.officeId })) }),
+          user: { status: 'ACTIVE' },
+        },
         select: { id: true, endpoint: true, p256dh: true, auth: true },
       });
       if (subscriptions.length === 0) return result;
@@ -186,4 +205,17 @@ export class PushService implements PushNotifier {
 
     return result;
   }
+}
+
+/** Remove destinatários repetidos (mesmo officeId + userId), preservando a ordem. */
+function dedupeRecipients(recipients: PushRecipient[]): PushRecipient[] {
+  const seen = new Set<string>();
+  const unique: PushRecipient[] = [];
+  for (const recipient of recipients) {
+    const key = `${recipient.officeId}:${recipient.userId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ officeId: recipient.officeId, userId: recipient.userId });
+  }
+  return unique;
 }

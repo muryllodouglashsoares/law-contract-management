@@ -32,7 +32,7 @@ import {
 } from './contract.schemas';
 
 const CONTRACT_INCLUDE = {
-  client: { select: { id: true, name: true, document: true, email: true } },
+  client: { select: { id: true, name: true, document: true, email: true, phone: true } },
   template: { select: { id: true, name: true } },
   responsible: { select: { id: true, name: true } },
   versions: { orderBy: { versionNumber: 'desc' as const }, take: 1 },

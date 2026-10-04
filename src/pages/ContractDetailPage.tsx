@@ -395,7 +395,12 @@ export default function ContractDetailPage() {
                 onGenerated={refetchDocuments}
               />
 
-              <ContractSignaturePanel contractId={contract.id} contractStatus={contract.status} />
+              <ContractSignaturePanel
+                contractId={contract.id}
+                contractNumber={contract.number}
+                contractStatus={contract.status}
+                clientPhone={contract.client.phone}
+              />
 
               <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--color-border)' }}>
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">

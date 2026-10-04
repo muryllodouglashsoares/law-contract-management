@@ -1,14 +1,34 @@
+import 'dotenv/config';
+
 import { PrismaClient } from '@prisma/client';
 
 import { buildContractTemplateVariables, renderTemplate } from '../src/shared/domain/render-template';
 import { hashPassword } from '../src/shared/auth/password';
-
-const prisma = new PrismaClient();
+import { assertSeedAllowed, resolveSeedCredentials, type SeedCredentials } from './seed-guard';
 
 /**
- * Dados de desenvolvimento. NUNCA utilize estas credenciais em produção.
- * Rode com: npm run db:seed
+ * Seed de DESENVOLVIMENTO/TESTE (inclui o ambiente E2E). Rode com: npm run db:seed
+ *
+ * - Bloqueado quando NODE_ENV=production: a verificação roda ANTES de criar o PrismaClient,
+ *   então nenhuma conexão/operação de banco acontece.
+ * - Não há senha fixa no código: as senhas vêm de SEED_PASSWORD (ou SEED_ADMIN_PASSWORD /
+ *   SEED_LAWYER_PASSWORD / SEED_ASSISTANT_PASSWORD) e só o hash bcrypt é gravado.
+ * - NÃO é um mecanismo de criação de usuários de produção. Usuários reais são criados pelo
+ *   ADMIN (POST /users), com senha provisória e troca obrigatória (mustChangePassword).
  */
+function loadSeedConfigOrExit(): SeedCredentials {
+  try {
+    assertSeedAllowed(process.env);
+    return resolveSeedCredentials(process.env);
+  } catch (error) {
+    console.error(`❌ ${error instanceof Error ? error.message : 'Seed não pôde ser iniciado.'}`);
+    process.exit(1);
+  }
+}
+
+const credentials = loadSeedConfigOrExit();
+const prisma = new PrismaClient();
+
 async function main() {
   console.log('🌱 Iniciando seed...');
 
@@ -25,8 +45,12 @@ async function main() {
     },
   });
 
-  const devPassword = 'Senha@123';
-  const passwordHash = await hashPassword(devPassword);
+  // Cada usuário recebe o hash da sua própria senha de desenvolvimento (vinda do ambiente).
+  const [adminPasswordHash, lawyerPasswordHash, assistantPasswordHash] = await Promise.all([
+    hashPassword(credentials.admin),
+    hashPassword(credentials.lawyer),
+    hashPassword(credentials.assistant),
+  ]);
 
   const admin = await prisma.user.upsert({
     where: { email: 'muryllo@escritorio.com.br' },
@@ -37,7 +61,7 @@ async function main() {
       email: 'muryllo@escritorio.com.br',
       phone: '(11) 98888-7777',
       oabNumber: 'OAB/SP 123.456',
-      passwordHash,
+      passwordHash: adminPasswordHash,
       role: 'ADMIN',
       status: 'ACTIVE',
     },
@@ -52,7 +76,7 @@ async function main() {
       email: 'advogado@escritorio.com.br',
       phone: '(11) 97777-6666',
       oabNumber: 'OAB/SP 234.567',
-      passwordHash,
+      passwordHash: lawyerPasswordHash,
       role: 'LAWYER',
       status: 'ACTIVE',
     },
@@ -65,7 +89,7 @@ async function main() {
       officeId: office.id,
       name: 'Carlos Eduardo Mendes',
       email: 'assistente@escritorio.com.br',
-      passwordHash,
+      passwordHash: assistantPasswordHash,
       role: 'ASSISTANT',
       status: 'ACTIVE',
     },
@@ -352,11 +376,11 @@ Pelo presente instrumento, o(a) outorgante nomeia e constitui seu(sua) procurado
 
   console.log('✅ Seed concluído:');
   console.log(`   Escritório: ${office.name} (${office.id})`);
-  console.log('   Usuários de desenvolvimento (senha para todos: "Senha@123"):');
+  console.log('   Usuários de desenvolvimento (senhas definidas por SEED_PASSWORD / SEED_*_PASSWORD):');
   console.log(`     ADMIN     — ${admin.email}`);
   console.log(`     LAWYER    — ${lawyer.email}`);
   console.log(`     ASSISTANT — ${assistant.email}`);
-  console.log('   ⚠️  Estas credenciais são apenas para desenvolvimento. Nunca as utilize em produção.');
+  console.log('   ⚠️  Credenciais apenas para desenvolvimento/teste. O seed é bloqueado em produção.');
 }
 
 main()

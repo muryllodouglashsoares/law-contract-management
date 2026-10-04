@@ -26,9 +26,12 @@ export default function NotificationsPage() {
   const all = data?.data ?? [];
   const unread = all.filter(n => !n.read);
   const read = all.filter(n => n.read);
+  // Fonte oficial: total real de não lidas do backend (não o que coube nesta página de 50).
+  const unreadCount = data?.unreadCount ?? 0;
 
   async function handleMarkRead(id: string) {
     try {
+      // O service dispara `notifications:changed` ao concluir: o AppLayout atualiza o contador do menu.
       await notificationsService.markRead(id);
       refetch();
     } catch {
@@ -51,10 +54,10 @@ export default function NotificationsPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-900" style={{ fontFamily: 'var(--font-display)' }}>Notificações</h1>
           <p className="text-sm mt-0.5" style={{ color: 'var(--color-muted-foreground)' }}>
-            {loading ? 'Carregando...' : `${unread.length} não lida${unread.length !== 1 ? 's' : ''}`}
+            {loading ? 'Carregando...' : `${unreadCount} não lida${unreadCount !== 1 ? 's' : ''}`}
           </p>
         </div>
-        {unread.length > 0 && (
+        {unreadCount > 0 && (
           <button onClick={handleMarkAllRead} className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 border rounded-lg hover:bg-slate-50 text-slate-600 transition-colors" style={{ borderColor: 'var(--color-border)' }}>
             <Check size={14} /> Marcar todas como lidas
           </button>

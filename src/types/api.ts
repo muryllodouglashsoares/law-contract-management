@@ -86,7 +86,8 @@ export interface Contract {
   conditions: string | null;
   createdAt: string;
   updatedAt: string;
-  client: { id: string; name: string; document: string; email: string };
+  /** `phone` vem do cadastro do cliente (null quando não informado); usado no botão "Enviar por WhatsApp". */
+  client: { id: string; name: string; document: string; email: string; phone: string | null };
   template: { id: string; name: string };
   responsible: { id: string; name: string };
   currentVersion: { versionNumber: number; content: string; createdAt: string } | null;

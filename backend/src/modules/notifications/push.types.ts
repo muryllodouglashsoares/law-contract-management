@@ -46,6 +46,12 @@ export interface PushSendResult {
  */
 export interface PushNotifier {
   sendToUser(recipient: PushRecipient, message: PushMessage): Promise<PushSendResult>;
+  /**
+   * Fan-out para vários usuários (mesma mensagem). Deduplica por `officeId + userId`, envia a TODOS
+   * os dispositivos de cada um e remove subscriptions 404/410. Quem decide QUEM recebe é a política
+   * central em `push-recipients.ts` — o notifier só entrega.
+   */
+  sendToUsers(recipients: PushRecipient[], message: PushMessage): Promise<PushSendResult>;
 }
 
 export interface PushSubscriptionTarget {

@@ -5,7 +5,22 @@ export const USERS = {
   admin: { email: 'muryllo@escritorio.com.br', name: 'Muryllo Rocha' },
   lawyer: { email: 'advogado@escritorio.com.br', name: 'Ana Paula Ferreira' },
 } as const
-export const SEED_PASSWORD = 'Senha@123'
+
+/**
+ * Senha dos usuários do seed: a MESMA que o backend recebeu em `SEED_PASSWORD` ao rodar
+ * `npm run db:seed` (não existe senha fixa no código). `E2E_SEED_PASSWORD` tem prioridade
+ * se você precisar de um valor diferente do `SEED_PASSWORD` do shell.
+ */
+function readSeedPassword(): string {
+  const value = process.env.E2E_SEED_PASSWORD ?? process.env.SEED_PASSWORD
+  if (!value) {
+    throw new Error(
+      'Defina SEED_PASSWORD (ou E2E_SEED_PASSWORD) com a mesma senha usada em `npm run db:seed` para rodar os testes E2E.',
+    )
+  }
+  return value
+}
+export const SEED_PASSWORD = readSeedPassword()
 
 const API_URL = (process.env.E2E_API_URL ?? 'http://localhost:3333').replace(/\/+$/, '')
 // Mesma chave usada por src/lib/api-client.ts.

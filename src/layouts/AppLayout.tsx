@@ -8,6 +8,7 @@ import {
 import GlobalSearch from '../components/GlobalSearch';
 import { useAuth } from '../contexts/AuthContext';
 import { useApiQuery } from '../hooks/useApiQuery';
+import { onNotificationsChanged } from '../lib/notifications-events';
 import { syncPush } from '../lib/push-client';
 import { ROLE_LABELS } from '../lib/roles';
 import { notificationsService } from '../services/notifications';
@@ -60,11 +61,15 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
-  const { data: notificationsSummary } = useApiQuery(
+  const { data: notificationsSummary, refetch: refetchUnread } = useApiQuery(
     () => notificationsService.list({ pageSize: 1, read: false }),
     [],
   );
   const unreadCount = notificationsSummary?.unreadCount ?? 0;
+
+  // Outras telas (ex.: Notificações) avisam por evento local quando marcam notificações como lidas;
+  // aqui refazemos a consulta e o contador do menu/topbar volta a refletir o backend.
+  useEffect(() => onNotificationsChanged(refetchUnread), [refetchUnread]);
 
   // Web Push: se este navegador já foi ativado por este usuário, garante o registro no servidor.
   const userId = user?.id;

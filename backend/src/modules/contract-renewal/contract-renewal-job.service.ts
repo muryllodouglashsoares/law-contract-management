@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { AUDIT_ACTIONS, SYSTEM_ACTOR_LABEL, writeAuditLog } from '../../shared/domain/audit';
 import { createNotification } from '../../shared/domain/notify';
 import { RENEWAL_ALERT_CONTRACT_STATUSES } from '../../shared/domain/status-map';
+import { notifyPushEvent } from '../notifications/push-recipients';
 import { PUSH_EVENT_TYPES, type PushNotifier } from '../notifications/push.types';
 
 /** Janela do alerta: contratos que terminam em até N dias (inclusive). */
@@ -22,7 +23,7 @@ export interface RenewalJobResult {
   skipped: number;
 }
 
-type PrismaDeps = Pick<PrismaClient, 'contract' | 'notification' | 'auditLog' | '$transaction'>;
+type PrismaDeps = Pick<PrismaClient, 'contract' | 'notification' | 'auditLog' | 'user' | '$transaction'>;
 
 export function startOfUtcDay(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -74,8 +75,10 @@ export function buildRenewalPushBody(input: { number: number; days: number }): s
  * coincidir e um novo ciclo de alerta fica elegível.
  *
  * Web Push (opcional): o aviso de navegador é enviado SOMENTE quando esta execução venceu a
- * reivindicação acima e a transação foi confirmada — ou seja, exatamente 1 push por
- * Notification criada, com a mesma idempotência. Falha de push nunca afeta o job.
+ * reivindicação acima e a transação foi confirmada — ou seja, exatamente 1 disparo por
+ * Notification criada, com a mesma idempotência. Vai para o responsável + ADMINs ativos do
+ * escritório (política em notifications/push-recipients.ts), sem duplicar quem é as duas coisas.
+ * Falha de push nunca afeta o job.
  */
 export class ContractRenewalJobService {
   constructor(
@@ -202,9 +205,13 @@ export class ContractRenewalJobService {
     });
 
     // Fora da transação: nunca enviar push de algo que ainda pode sofrer rollback.
+    // Destinatários (responsável + ADMINs ativos do escritório) vêm da política central
+    // (notifications/push-recipients.ts). notifyPushEvent nunca lança.
     if (alerted) {
-      await this.push?.sendToUser(
-        { officeId: contract.officeId, userId: contract.responsibleId },
+      await notifyPushEvent(
+        { prisma: this.prisma, push: this.push },
+        PUSH_EVENT_TYPES.CONTRACT_RENEWAL,
+        { officeId: contract.officeId, responsibleId: contract.responsibleId },
         {
           type: PUSH_EVENT_TYPES.CONTRACT_RENEWAL,
           title: 'Contrato próximo do vencimento',
