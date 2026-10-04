@@ -8,7 +8,7 @@ import {
   resolvePushRecipients,
   type PushRecipientPolicy,
 } from '../../src/modules/notifications/push-recipients';
-import type { PushMessage } from '../../src/modules/notifications/push.types';
+import type { PushMessage, PushNotifier, PushSendResult } from '../../src/modules/notifications/push.types';
 import { ALL_USERS, OFFICE, TEAM, makeFakeUserDb } from './helpers-push-recipients';
 
 const CTX = { officeId: OFFICE, responsibleId: TEAM.lawyer!.id };
@@ -68,7 +68,7 @@ describe('resolvePushRecipients', () => {
     expect(findMany).toHaveBeenCalledTimes(1);
     const where = findMany.mock.calls[0]?.[0].where;
     expect(where).toMatchObject({ officeId: OFFICE, status: 'ACTIVE' });
-    expect(where.OR).toEqual([{ id: { in: ['lawyer-1'] } }, { role: { in: ['ADMIN'] } }]);
+    expect(where?.OR).toEqual([{ id: { in: ['lawyer-1'] } }, { role: { in: ['ADMIN'] } }]);
   });
 
   it('defesa em profundidade: mesmo que a consulta devolvesse usuários indevidos, eles são descartados', async () => {
@@ -117,8 +117,11 @@ describe('resolvePushRecipients', () => {
 describe('notifyPushEvent', () => {
   const MESSAGE: PushMessage = { type: 'CONTRACT_SIGNED', title: 'Contrato assinado', body: 'O contrato #1 foi assinado pelo cliente.', url: '/contratos/c-1' };
 
-  function makePush(impl?: () => Promise<unknown>) {
-    return { sendToUser: vi.fn(), sendToUsers: vi.fn(impl ?? (async () => ({ sent: 3, removed: 0, failed: 0 }))) };
+  function makePush(impl?: PushNotifier['sendToUsers']) {
+    const sendToUsers = vi.fn<PushNotifier['sendToUsers']>(
+      impl ?? (async (): Promise<PushSendResult> => ({ sent: 3, removed: 0, failed: 0 })),
+    );
+    return { sendToUser: vi.fn<PushNotifier['sendToUser']>(), sendToUsers };
   }
 
   it('envia UMA chamada de fan-out com os destinatários resolvidos e a mensagem intacta', async () => {
@@ -127,7 +130,7 @@ describe('notifyPushEvent', () => {
     await notifyPushEvent({ prisma, push }, 'CONTRACT_SIGNED', CTX, MESSAGE);
 
     expect(push.sendToUsers).toHaveBeenCalledTimes(1);
-    const [recipients, message] = push.sendToUsers.mock.calls[0] as [{ userId: string }[], PushMessage];
+    const [recipients, message] = push.sendToUsers.mock.calls[0]!;
     expect(ids(recipients).sort()).toEqual(['admin-1', 'admin-2', 'lawyer-1']);
     expect(message).toEqual(MESSAGE);
     expect(push.sendToUser).not.toHaveBeenCalled();
