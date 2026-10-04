@@ -1,3 +1,4 @@
+import type { PrismaClient } from '@prisma/client';
 import { vi } from 'vitest';
 
 export interface FakeUser {
@@ -34,7 +35,7 @@ export function makeFakeUserDb(users: FakeUser[], opts: { ignoreWhere?: boolean 
       return true;
     });
   });
-  return { prisma: { user: { findMany } } as never, findMany };
+  return { prisma: { user: { findMany } } as unknown as Pick<PrismaClient, 'user'>, findMany };
 }
 
 export const OFFICE = 'office-1';
