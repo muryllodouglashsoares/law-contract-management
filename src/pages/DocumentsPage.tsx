@@ -213,7 +213,10 @@ export default function DocumentsPage() {
                           {d.fileType}
                         </div>
                         <div>
-                          <div className="text-sm font-medium text-slate-900">{d.fileName}</div>
+                          <div className="text-sm font-medium text-slate-900 flex items-center gap-2">
+                            {d.fileName}
+                            {d.signed && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: '#EFF6FF', color: '#1D4ED8' }}>PDF assinado</span>}
+                          </div>
                           <div className="text-xs text-slate-400 capitalize">{d.category}{d.versionNumber ? ` · versão ${d.versionNumber}` : ''}</div>
                         </div>
                       </div>
@@ -236,7 +239,7 @@ export default function DocumentsPage() {
                     <td className="px-5 py-3.5 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button onClick={() => documentsService.download(d.id, d.fileName)} className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors" title="Baixar"><Download size={14} /></button>
-                        <button onClick={() => handleDelete(d.id, d.fileName)} className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Excluir"><Trash2 size={14} /></button>
+                        {!d.signed && <button onClick={() => handleDelete(d.id, d.fileName)} className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Excluir"><Trash2 size={14} /></button>}
                       </div>
                     </td>
                   </tr>

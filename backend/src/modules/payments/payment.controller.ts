@@ -4,6 +4,7 @@ import { prisma } from '../../shared/database/prisma';
 import { toPublicPayment } from '../../shared/utils/serialize-payment';
 import type {
   CreatePaymentBody,
+  GenerateInstallmentsBody,
   ListPaymentsQuery,
   PaymentIdParams,
   RegisterPaymentBody,
@@ -14,6 +15,22 @@ import { PaymentService } from './payment.service';
 const paymentService = new PaymentService(prisma);
 
 export const paymentController = {
+  async previewInstallments(request: FastifyRequest<{ Body: GenerateInstallmentsBody }>, reply: FastifyReply) {
+    const preview = await paymentService.previewInstallments(
+      { userId: request.user.userId, officeId: request.user.officeId },
+      request.body,
+    );
+    return reply.status(200).send(preview);
+  },
+
+  async generateInstallments(request: FastifyRequest<{ Body: GenerateInstallmentsBody }>, reply: FastifyReply) {
+    const result = await paymentService.generateInstallments(
+      { userId: request.user.userId, officeId: request.user.officeId },
+      request.body,
+    );
+    return reply.status(201).send({ data: result.data.map((p) => toPublicPayment(p)) });
+  },
+
   async summary(request: FastifyRequest, reply: FastifyReply) {
     const summary = await paymentService.summary(request.user.officeId);
     return reply.status(200).send(summary);

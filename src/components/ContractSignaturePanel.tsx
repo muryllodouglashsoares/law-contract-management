@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { AlertCircle, Check, Copy, Link2, MessageCircle, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Check, Copy, FileCheck2, Link2, Mail, MessageCircle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toErrorMessage, useApiQuery } from '../hooks/useApiQuery';
 import { buildSignatureWhatsAppMessage, buildWhatsAppUrl } from '../lib/whatsapp';
 import { contractsService } from '../services/contracts';
-import type { ContractStatusApi, SignatureLink, SignatureLinkState } from '../types/api';
+import type { ContractStatusApi, SignatureEmailStatus, SignatureLink, SignatureLinkState } from '../types/api';
 
 const SIGNABLE: ContractStatusApi[] = ['enviado', 'em_revisao'];
 
@@ -13,6 +13,13 @@ const STATE_LABELS: Record<SignatureLinkState, { label: string; style: { backgro
   used: { label: 'Assinado', style: { backgroundColor: '#EFF6FF', color: '#1D4ED8' } },
   expired: { label: 'Expirado', style: { backgroundColor: '#FFFBEB', color: '#B45309' } },
   revoked: { label: 'Substituído', style: { backgroundColor: '#F1F5F9', color: '#475569' } },
+};
+
+const EMAIL_MESSAGES: Record<SignatureEmailStatus, { text: string; ok: boolean }> = {
+  sent: { text: 'Link enviado por e-mail ao cliente.', ok: true },
+  failed: { text: 'Não foi possível enviar o e-mail. O link foi criado: copie ou envie pelo WhatsApp.', ok: false },
+  unavailable: { text: 'O envio automático por e-mail não está configurado neste sistema. Copie o link ou use o WhatsApp.', ok: false },
+  disabled_by_preference: { text: 'O envio por e-mail está desativado nas suas preferências (Configurações → Preferências).', ok: false },
 };
 
 function formatDateTime(iso: string): string {
@@ -45,19 +52,35 @@ export default function ContractSignaturePanel({ contractId, contractNumber, con
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<SignatureEmailStatus | null>(null);
+  const [downloadingSigned, setDownloadingSigned] = useState(false);
 
   if (!canManage) return null;
 
   const signable = SIGNABLE.includes(contractStatus);
   const records = data?.data ?? [];
 
-  async function generate() {
+  async function downloadSigned() {
+    setDownloadingSigned(true);
+    setError(null);
+    try {
+      await contractsService.downloadSignedPdf(contractId, `Contrato_${contractNumber}_assinado.pdf`);
+    } catch (err) {
+      setError(toErrorMessage(err, 'Não foi possível baixar o PDF assinado.'));
+    } finally {
+      setDownloadingSigned(false);
+    }
+  }
+
+  async function generate(sendEmail = false) {
     setError(null);
     setGenerating(true);
     setCopied(false);
+    setEmailStatus(null);
     try {
-      const created = await contractsService.createSignatureLink(contractId);
+      const created = await contractsService.createSignatureLink(contractId, { sendEmail });
       setLink(created);
+      setEmailStatus(created.email ?? null);
       refetch();
     } catch (err) {
       setError(toErrorMessage(err, 'Não foi possível gerar o link de aceite.'));
@@ -98,15 +121,26 @@ export default function ContractSignaturePanel({ contractId, contractNumber, con
             Assinatura eletrônica simples por link público de uso único. Não equivale a assinatura digital com certificado ICP-Brasil.
           </p>
         </div>
-        <button
-          onClick={generate}
-          disabled={!signable || generating}
-          title={signable ? undefined : 'Disponível para contratos enviados ou em revisão'}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 disabled:opacity-40"
-          style={{ backgroundColor: 'var(--color-primary)' }}
-        >
-          <Link2 size={14} /> {generating ? 'Gerando...' : 'Gerar link de aceite'}
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => generate(false)}
+            disabled={!signable || generating}
+            title={signable ? undefined : 'Disponível para contratos enviados ou em revisão'}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-white rounded-lg hover:opacity-90 disabled:opacity-40"
+            style={{ backgroundColor: 'var(--color-primary)' }}
+          >
+            <Link2 size={14} /> {generating ? 'Gerando...' : 'Gerar link de aceite'}
+          </button>
+          <button
+            onClick={() => generate(true)}
+            disabled={!signable || generating}
+            title={signable ? 'Gera um novo link e envia por e-mail ao cliente (o link anterior deixa de valer)' : 'Disponível para contratos enviados ou em revisão'}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold border rounded-lg bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40"
+            style={{ borderColor: 'var(--color-border)' }}
+          >
+            <Mail size={14} /> Gerar e enviar por e-mail
+          </button>
+        </div>
       </div>
 
       {!signable && records.length === 0 && (
@@ -118,6 +152,16 @@ export default function ContractSignaturePanel({ contractId, contractNumber, con
       {error && (
         <div className="mb-3 flex items-center gap-2 px-3 py-2.5 text-sm rounded-lg" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
           <AlertCircle size={15} className="flex-shrink-0" /> {error}
+        </div>
+      )}
+
+      {emailStatus && (
+        <div
+          role="status"
+          className="mb-3 flex items-center gap-2 px-3 py-2.5 text-sm rounded-lg"
+          style={EMAIL_MESSAGES[emailStatus].ok ? { backgroundColor: '#ECFDF5', color: '#047857' } : { backgroundColor: '#FFFBEB', color: '#92400E' }}
+        >
+          <Mail size={15} className="flex-shrink-0" /> {EMAIL_MESSAGES[emailStatus].text}
         </div>
       )}
 
@@ -176,6 +220,23 @@ export default function ContractSignaturePanel({ contractId, contractNumber, con
                       ? `Assinado em ${formatDateTime(record.signedAt)}${record.signerIp ? ` · IP ${record.signerIp}` : ''}`
                       : `Gerado em ${formatDateTime(record.createdAt)} · expira em ${formatDateTime(record.expiresAt)}`}
                   </div>
+                  {record.state === 'active' && (
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted-foreground)' }}>
+                      {record.openCount > 0
+                        ? `Aberto ${record.openCount}x · primeira abertura em ${formatDateTime(record.firstOpenedAt ?? record.createdAt)}`
+                        : 'Cliente ainda não abriu o link'}
+                    </div>
+                  )}
+                  {record.state === 'used' && (
+                    <button
+                      onClick={downloadSigned}
+                      disabled={downloadingSigned}
+                      className="mt-1.5 flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg border hover:bg-slate-50 disabled:opacity-50"
+                      style={{ borderColor: 'var(--color-border)', color: '#1D4ED8' }}
+                    >
+                      <FileCheck2 size={13} /> {downloadingSigned ? 'Baixando...' : 'PDF assinado (com comprovante)'}
+                    </button>
+                  )}
                   {record.signatureHash && (
                     <div className="text-xs mt-0.5 break-all text-slate-400" style={{ fontFamily: 'var(--font-mono)' }}>
                       SHA-256 {record.signatureHash}

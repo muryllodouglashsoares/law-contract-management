@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 /**
  * Converte um campo Decimal do Prisma (usado para valores monetários, nunca
@@ -9,4 +9,13 @@ import type { Prisma } from '@prisma/client';
  */
 export function toMoneyNumber(value: Prisma.Decimal): number {
   return value.toNumber();
+}
+
+/**
+ * Aplica um reajuste percentual a um valor monetário, sempre em Decimal (nunca float):
+ *   novo = valor * (1 + percentual / 100), arredondado a 2 casas (meio para cima).
+ */
+export function applyPercentAdjustment(value: Prisma.Decimal, percent: number): Prisma.Decimal {
+  const factor = new Prisma.Decimal(1).plus(new Prisma.Decimal(String(percent)).div(100));
+  return value.mul(factor).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 }

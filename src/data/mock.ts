@@ -67,6 +67,7 @@ export const history = [
 export const statusConfig: Record<string, { label: string; color: string; bg: string; dot: string }> = {
   rascunho:       { label: 'Rascunho',          color: '#64748B', bg: '#F1F5F9', dot: '#94A3B8' },
   pronto_envio:   { label: 'Pronto p/ envio',   color: '#2563EB', bg: '#EFF6FF', dot: '#3B82F6' },
+  aprovado:       { label: 'Aprovado',           color: '#7C3AED', bg: '#F5F3FF', dot: '#8B5CF6' },
   enviado:        { label: 'Enviado',            color: '#2563EB', bg: '#EFF6FF', dot: '#60A5FA' },
   em_revisao:     { label: 'Em revisão',         color: '#D97706', bg: '#FFFBEB', dot: '#F59E0B' },
   assinado:       { label: 'Assinado',           color: '#0D9488', bg: '#F0FDFA', dot: '#14B8A6' },

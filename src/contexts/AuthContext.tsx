@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 
 import { ApiError, apiClient, getStoredToken, setStoredToken, setUnauthorizedHandler } from '../lib/api-client';
 import { detachPushOnLogout } from '../lib/push-client';
+import { authService } from '../services/auth';
 import type { Office, User } from '../types/api';
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
@@ -13,7 +14,9 @@ interface AuthState {
 }
 
 interface AuthContextValue extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
+  /** Devolve `{ challengeToken }` quando a conta tem 2FA: o login só termina em `completeTwoFactorLogin`. */
+  login: (email: string, password: string) => Promise<{ challengeToken: string } | null>;
+  completeTwoFactorLogin: (challengeToken: string, code: string) => Promise<void>;
   logout: () => void;
   /** Recarrega usuário/escritório (ex.: depois de editar o perfil em Configurações). */
   refresh: () => Promise<void>;
@@ -57,12 +60,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (email: string, password: string) => {
       try {
-        const response = await apiClient.post<{ accessToken: string }>('/auth/login', { email, password });
+        const response = await authService.login(email, password);
+        if ('requiresTwoFactor' in response) return { challengeToken: response.challengeToken };
         setStoredToken(response.accessToken);
         await loadSession();
+        return null;
       } catch (error) {
         if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
           throw new Error('E-mail ou senha incorretos.');
+        }
+        throw error;
+      }
+    },
+    [loadSession],
+  );
+
+  const completeTwoFactorLogin = useCallback(
+    async (challengeToken: string, code: string) => {
+      try {
+        const response = await authService.verifyTwoFactorLogin(challengeToken, code);
+        setStoredToken(response.accessToken);
+        await loadSession();
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 429)) {
+          throw new Error(error.message);
         }
         throw error;
       }
@@ -78,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ ...state, login, logout, refresh: loadSession }}>
+    <AuthContext.Provider value={{ ...state, login, completeTwoFactorLogin, logout, refresh: loadSession }}>
       {children}
     </AuthContext.Provider>
   );

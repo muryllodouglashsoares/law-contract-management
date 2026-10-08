@@ -7,6 +7,8 @@ export interface PublicNotification {
   description: string;
   priority: boolean;
   read: boolean;
+  /** Caminho interno para abrir o item relacionado (ou null). */
+  link: string | null;
   createdAt: string;
 }
 
@@ -18,6 +20,7 @@ export function toPublicNotification(notification: Notification): PublicNotifica
     description: notification.description,
     priority: notification.priority,
     read: notification.read,
+    link: notification.link,
     createdAt: notification.createdAt.toISOString(),
   };
 }

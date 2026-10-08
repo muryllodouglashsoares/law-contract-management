@@ -3,9 +3,12 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../../config/env';
 import { prisma } from '../../shared/database/prisma';
 import type { ContractIdParams } from '../contracts/contract.schemas';
+import { emailService, notificationPreferenceService } from '../notifications/notification.instance';
 import { pushService } from '../notifications/push.instance';
-import type { PublicTokenParams, SignContractBody } from './contract-signature.schemas';
+import type { CreateSignatureLinkBody, PublicTokenParams, SignContractBody } from './contract-signature.schemas';
 import { ContractSignatureService } from './contract-signature.service';
+import { createSignatureLinkMailer } from './signature-link-mailer';
+import { SignedPdfService } from './signed-pdf.service';
 
 export function createSignatureService(): ContractSignatureService {
   return new ContractSignatureService(prisma, {
@@ -13,8 +16,12 @@ export function createSignatureService(): ContractSignatureService {
     publicAppUrl: env.PUBLIC_APP_URL ?? (env.NODE_ENV === 'production' ? undefined : 'http://localhost:5173'),
     expirationHours: env.PUBLIC_SIGNATURE_EXPIRATION_HOURS,
     push: pushService,
+    signedPdf: signedPdfService,
+    mailer: createSignatureLinkMailer(emailService, notificationPreferenceService),
   });
 }
+
+export const signedPdfService = new SignedPdfService(prisma);
 
 const signatureService = createSignatureService();
 
@@ -26,10 +33,14 @@ function noStore(reply: FastifyReply): void {
 
 export const contractSignatureController = {
   // --- autenticado ---------------------------------------------------
-  async createLink(request: FastifyRequest<{ Params: ContractIdParams }>, reply: FastifyReply) {
+  async createLink(
+    request: FastifyRequest<{ Params: ContractIdParams; Body: CreateSignatureLinkBody | undefined }>,
+    reply: FastifyReply,
+  ) {
     const link = await signatureService.createLink(
       { userId: request.user.userId, officeId: request.user.officeId },
       request.params.id,
+      { sendEmail: request.body?.sendEmail === true },
     );
     noStore(reply);
     return reply.status(201).send({
@@ -37,6 +48,7 @@ export const contractSignatureController = {
       expiresAt: link.expiresAt.toISOString(),
       singleUse: link.singleUse,
       versionNumber: link.versionNumber,
+      ...(link.email ? { email: link.email } : {}),
     });
   },
 
@@ -48,6 +60,8 @@ export const contractSignatureController = {
         createdAt: row.createdAt.toISOString(),
         expiresAt: row.expiresAt.toISOString(),
         signedAt: row.signedAt ? row.signedAt.toISOString() : null,
+        firstOpenedAt: row.firstOpenedAt ? row.firstOpenedAt.toISOString() : null,
+        lastOpenedAt: row.lastOpenedAt ? row.lastOpenedAt.toISOString() : null,
       })),
     });
   },

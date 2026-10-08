@@ -16,8 +16,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -34,15 +34,18 @@ enum UserStatus {
 
 /// Escritório de advocacia — unidade organizacional principal (tenant).
 model Office {
-  id          String   @id @default(uuid())
-  name        String
-  email       String   @unique
-  phone       String?
-  document    String   @unique
-  address     String?
-  specialties String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                      String   @id @default(uuid())
+  name                    String
+  email                   String   @unique
+  phone                   String?
+  document                String   @unique
+  address                 String?
+  specialties             String?
+  /// Fluxo de aprovação interna: quando true, o ASSISTANT só envia o contrato para revisão
+  /// (PRONTO_ENVIO) e o envio ao cliente exige a aprovação (APROVADO) de um ADMIN/LAWYER.
+  requireInternalApproval Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 
   users             User[]
   clients           Client[]
@@ -54,35 +57,42 @@ model Office {
   pushSubscriptions PushSubscription[]
   auditLogs         AuditLog[]
   publicSignatures  ContractPublicSignature[]
+  emailDeliveries   EmailDelivery[]
 
   @@map("offices")
 }
 
 /// Usuário do sistema, sempre vinculado a um escritório (tenant).
 model User {
-  id           String     @id @default(uuid())
-  officeId     String
-  name         String
-  email        String     @unique
-  phone        String?
-  oabNumber    String?
-  passwordHash String
-  role         UserRole   @default(ASSISTANT)
-  status       UserStatus @default(ACTIVE)
+  id                 String     @id @default(uuid())
+  officeId           String
+  name               String
+  email              String     @unique
+  phone              String?
+  oabNumber          String?
+  passwordHash       String
+  role               UserRole   @default(ASSISTANT)
+  status             UserStatus @default(ACTIVE)
   /// true enquanto o usuário usa a senha provisória gerada no convite pelo ADMIN.
-  mustChangePassword Boolean @default(false)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  mustChangePassword Boolean    @default(false)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
 
   office Office @relation(fields: [officeId], references: [id], onDelete: Cascade)
 
-  contractsResponsible Contract[]        @relation("ContractResponsible")
-  contractVersions     ContractVersion[]
-  documentsUploaded    Document[]
-  notifications        Notification[]
-  pushSubscriptions    PushSubscription[]
-  auditLogs            AuditLog[]
-  publicSignaturesCreated ContractPublicSignature[]
+  contractsResponsible        Contract[]                  @relation("ContractResponsible")
+  contractVersions            ContractVersion[]
+  documentsUploaded           Document[]
+  notifications               Notification[]
+  pushSubscriptions           PushSubscription[]
+  auditLogs                   AuditLog[]
+  publicSignaturesCreated     ContractPublicSignature[]
+  notificationPreference      UserNotificationPreference?
+  twoFactor                   UserTwoFactor?
+  backupCodes                 UserBackupCode[]
+  contractsSubmittedForReview Contract[]                  @relation("ContractReviewSubmitter")
+  contractsReviewed           Contract[]                  @relation("ContractReviewer")
+  emailDeliveries             EmailDelivery[]
 
   @@index([officeId])
   @@map("users")
@@ -139,14 +149,14 @@ enum ContractTemplateStatus {
 /// Modelo/template reutilizável de contrato, com variáveis {{grupo.campo}}
 /// substituídas na geração de uma ContractVersion.
 model ContractTemplate {
-  id          String                  @id @default(uuid())
+  id          String                 @id @default(uuid())
   officeId    String
   name        String
   description String?
   content     String
-  status      ContractTemplateStatus  @default(ACTIVE)
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
+  status      ContractTemplateStatus @default(ACTIVE)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
 
   office    Office     @relation(fields: [officeId], references: [id], onDelete: Cascade)
   contracts Contract[]
@@ -168,25 +178,28 @@ enum ContractStatus {
   ATIVO
   ENCERRADO
   CANCELADO
+  /// Aprovado internamente por ADMIN/LAWYER (fluxo de aprovação interna); só então pode ser enviado.
+  /// Declarado por último porque o PostgreSQL só acrescenta valores de enum ao final.
+  APROVADO
 }
 
 /// Contrato — domínio principal do produto.
 /// `number` é um identificador curto e sequencial só para exibição
 /// (ex.: "#102"); `id` (uuid) é a chave real usada em relacionamentos e rotas.
 model Contract {
-  id             String         @id @default(uuid())
-  number         Int            @unique @default(autoincrement())
-  officeId       String
-  clientId       String
-  templateId     String
-  responsibleId  String
-  status         ContractStatus @default(RASCUNHO)
-  value          Decimal        @db.Decimal(12, 2)
-  object         String
-  startDate      DateTime
+  id                     String                  @id @default(uuid())
+  number                 Int                     @unique @default(autoincrement())
+  officeId               String
+  clientId               String
+  templateId             String
+  responsibleId          String
+  status                 ContractStatus          @default(RASCUNHO)
+  value                  Decimal                 @db.Decimal(12, 2)
+  object                 String
+  startDate              DateTime
   /// Data de término. Nullable: contratos antigos (e contratos por prazo
   /// indeterminado) não possuem data de término.
-  endDate        DateTime?
+  endDate                DateTime?
   /// Controle de idempotência do alerta de renovação (job diário).
   /// `renewalAlertForEndDate` guarda para QUAL endDate o alerta já foi enviado:
   /// se o endDate mudar, o valor deixa de coincidir e um novo ciclo de alerta
@@ -194,25 +207,40 @@ model Contract {
   /// ContractRenewalJobService), então execuções concorrentes não duplicam.
   renewalAlertSentAt     DateTime?
   renewalAlertForEndDate DateTime?
-  termText       String?
-  conditions     String?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  termText               String?
+  conditions             String?
+  /// Revisão interna (último ciclo): quem enviou para revisão, quem decidiu e o motivo da rejeição.
+  /// O histórico completo de ciclos fica no AuditLog.
+  reviewSubmittedAt      DateTime?
+  reviewSubmittedById    String?
+  reviewDecision         ContractReviewDecision?
+  reviewDecidedAt        DateTime?
+  reviewDecidedById      String?
+  reviewRejectionReason  String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
 
-  office      Office            @relation(fields: [officeId], references: [id], onDelete: Cascade)
-  client      Client            @relation(fields: [clientId], references: [id])
-  template    ContractTemplate  @relation(fields: [templateId], references: [id])
-  responsible User              @relation("ContractResponsible", fields: [responsibleId], references: [id])
-  versions    ContractVersion[]
-  documents   Document[]
-  payments    Payment[]
-  publicSignatures ContractPublicSignature[]
+  office            Office                    @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  client            Client                    @relation(fields: [clientId], references: [id])
+  template          ContractTemplate          @relation(fields: [templateId], references: [id])
+  responsible       User                      @relation("ContractResponsible", fields: [responsibleId], references: [id])
+  reviewSubmittedBy User?                     @relation("ContractReviewSubmitter", fields: [reviewSubmittedById], references: [id], onDelete: SetNull)
+  reviewDecidedBy   User?                     @relation("ContractReviewer", fields: [reviewDecidedById], references: [id], onDelete: SetNull)
+  versions          ContractVersion[]
+  documents         Document[]
+  payments          Payment[]
+  publicSignatures  ContractPublicSignature[]
 
   @@index([officeId])
   @@index([officeId, status])
   @@index([officeId, endDate])
   @@index([clientId])
   @@map("contracts")
+}
+
+enum ContractReviewDecision {
+  APPROVED
+  REJECTED
 }
 
 /// Snapshot versionado do conteúdo gerado de um contrato (template + variáveis
@@ -224,11 +252,13 @@ model ContractVersion {
   versionNumber Int
   content       String
   authorId      String
+  /// Motivo da versão quando não é uma simples edição de rascunho (ex.: renovação do contrato).
+  changeNote    String?
   createdAt     DateTime @default(now())
 
-  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  author   User     @relation(fields: [authorId], references: [id])
-  document Document?
+  contract         Contract                  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  author           User                      @relation(fields: [authorId], references: [id])
+  document         Document?
   publicSignatures ContractPublicSignature[]
 
   @@unique([contractId, versionNumber])
@@ -249,35 +279,62 @@ model ContractVersion {
 /// contrato — a garantia de uso único está no banco, não em memória.
 /// O link é atrelado a `contractVersionId`, nunca apenas ao contrato.
 model ContractPublicSignature {
-  id                String    @id @default(uuid())
-  officeId          String
-  contractId        String
-  contractVersionId String
-  createdById       String
-  tokenHash         String    @unique @db.Char(64)
-  expiresAt         DateTime
+  id                 String    @id @default(uuid())
+  officeId           String
+  contractId         String
+  contractVersionId  String
+  createdById        String
+  tokenHash          String    @unique @db.Char(64)
+  expiresAt          DateTime
   /// Preenchido quando um novo link substitui este (ou quando o link é invalidado).
-  revokedAt         DateTime?
-  usedAt            DateTime?
-  signedAt          DateTime?
-  signerName        String?
-  signerDocument    String?
-  signerIp          String?
-  signerUserAgent   String?
+  revokedAt          DateTime?
+  usedAt             DateTime?
+  signedAt           DateTime?
+  signerName         String?
+  signerDocument     String?
+  signerIp           String?
+  signerUserAgent    String?
   consentTextVersion String?
   /// SHA-256 (hex) de um payload canônico do evento de aceite (sem o token).
-  signatureHash     String?   @db.Char(64)
-  createdAt         DateTime  @default(now())
+  signatureHash      String?   @db.Char(64)
+  /// Rastreamento de abertura da página pública (nunca guarda o token): alimenta o alerta
+  /// "link enviado e nunca aberto". Links anteriores à implantação começam com openCount = 0.
+  firstOpenedAt      DateTime?
+  lastOpenedAt       DateTime?
+  openCount          Int       @default(0)
+  createdAt          DateTime  @default(now())
 
-  office          Office          @relation(fields: [officeId], references: [id], onDelete: Cascade)
-  contract        Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  contractVersion ContractVersion @relation(fields: [contractVersionId], references: [id], onDelete: Cascade)
-  createdBy       User            @relation(fields: [createdById], references: [id])
+  office          Office               @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  contract        Contract             @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contractVersion ContractVersion      @relation(fields: [contractVersionId], references: [id], onDelete: Cascade)
+  createdBy       User                 @relation(fields: [createdById], references: [id])
+  alerts          SignatureLinkAlert[]
+  /// PDF final com o comprovante de aceite (no máximo um por assinatura).
+  signedDocument  Document?
 
   @@index([contractId])
   @@index([officeId])
   @@index([expiresAt])
   @@map("contract_public_signatures")
+}
+
+enum SignatureLinkAlertType {
+  SIGNATURE_NEVER_OPENED
+  SIGNATURE_EXPIRING
+}
+
+/// Evento de alerta de um link de assinatura. O UNIQUE (signatureId, type) é a garantia de
+/// idempotência no banco: o job só notifica quando consegue inserir a linha.
+model SignatureLinkAlert {
+  id          String                 @id @default(uuid())
+  signatureId String
+  type        SignatureLinkAlertType
+  createdAt   DateTime               @default(now())
+
+  signature ContractPublicSignature @relation(fields: [signatureId], references: [id], onDelete: Cascade)
+
+  @@unique([signatureId, type])
+  @@map("signature_link_alerts")
 }
 
 // ---------------------------------------------------------------------
@@ -296,31 +353,35 @@ enum DocumentCategory {
 /// em produção o mesmo campo passaria a guardar a chave de um object storage
 /// como S3 — a troca de storage não exige alterar o schema).
 model Document {
-  id           String           @id @default(uuid())
-  officeId     String
-  contractId   String
-  uploadedById String
+  id                String           @id @default(uuid())
+  officeId          String
+  contractId        String
+  uploadedById      String
   /// Preenchido apenas em PDFs gerados pelo sistema a partir de uma
   /// ContractVersion. @unique => no máximo um PDF por versão (imutável);
   /// uploads manuais e documentos antigos ficam com null.
-  contractVersionId String? @unique
-  fileName     String
-  fileType     String
-  mimeType     String
-  sizeBytes    Int
-  category     DocumentCategory @default(DOCUMENTO)
+  contractVersionId String?          @unique
+  /// Preenchido somente no PDF FINAL com o comprovante de aceite eletrônico. @unique => no máximo
+  /// um PDF assinado por evento de assinatura. O PDF original da versão continua em contractVersionId.
+  signatureId       String?          @unique
+  fileName          String
+  fileType          String
+  mimeType          String
+  sizeBytes         Int
+  category          DocumentCategory @default(DOCUMENTO)
   /// Chave do objeto no storage (`{officeId}/{uuid}.{ext}`). O nome histórico
   /// da coluna foi mantido para não exigir renomeação; vale para qualquer driver.
-  storagePath  String
+  storagePath       String
   /// SHA-256 (hex, 64 chars) do conteúdo binário. Preenchido nos PDFs gerados
   /// a partir de uma ContractVersion; null em uploads manuais e documentos antigos.
-  contentHash  String?          @db.Char(64)
-  createdAt    DateTime         @default(now())
+  contentHash       String?          @db.Char(64)
+  createdAt         DateTime         @default(now())
 
-  office     Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)
-  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  uploadedBy User     @relation(fields: [uploadedById], references: [id])
-  contractVersion ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
+  office          Office                   @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  contract        Contract                 @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  uploadedBy      User                     @relation(fields: [uploadedById], references: [id])
+  contractVersion ContractVersion?         @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
+  signature       ContractPublicSignature? @relation(fields: [signatureId], references: [id], onDelete: SetNull)
 
   @@index([officeId])
   @@index([contractId])
@@ -361,16 +422,44 @@ model Payment {
   method            PaymentMethod?
   paidAt            DateTime?
   notes             String?
+  /// Pix "copia e cola" (BR Code). Apenas informativo: exibir/copiar o Pix NUNCA baixa a parcela;
+  /// a baixa é sempre manual (POST /payments/:id/register).
+  pixCode           String?        @db.Text
+  pixKey            String?
+  pixInstructions   String?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
-  office   Office   @relation(fields: [officeId], references: [id], onDelete: Cascade)
-  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  office   Office              @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  contract Contract            @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  alerts   PaymentAlertEvent[]
 
   @@index([officeId])
   @@index([contractId])
   @@index([officeId, status])
+  @@index([officeId, status, dueDate])
+  @@index([status, dueDate])
   @@map("payments")
+}
+
+enum PaymentAlertType {
+  BEFORE_3_DAYS
+  DUE_TODAY
+  AFTER_1_DAY
+}
+
+/// Evento de alerta de pagamento já enviado. O UNIQUE (paymentId, type) garante, no banco, que o
+/// mesmo alerta nunca é enviado duas vezes (nem em execuções concorrentes do job).
+model PaymentAlertEvent {
+  id        String           @id @default(uuid())
+  paymentId String
+  type      PaymentAlertType
+  createdAt DateTime         @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, type])
+  @@map("payment_alert_events")
 }
 
 // ---------------------------------------------------------------------
@@ -394,6 +483,8 @@ model Notification {
   description String
   priority    Boolean          @default(false)
   read        Boolean          @default(false)
+  /// Caminho relativo da aplicação (ex.: /contratos/<id>) gerado pelo servidor; nunca vem do cliente.
+  link        String?
   createdAt   DateTime         @default(now())
 
   office Office @relation(fields: [officeId], references: [id], onDelete: Cascade)
@@ -427,6 +518,107 @@ model PushSubscription {
   @@index([userId])
   @@index([officeId])
   @@map("push_subscriptions")
+}
+
+// ---------------------------------------------------------------------
+// Preferências de notificação
+// ---------------------------------------------------------------------
+
+/// Preferências de canal de notificação de UM usuário. Sem linha = padrões (e-mail e push ligados,
+/// WhatsApp desligado). `pushEnabled = false` silencia o Web Push do usuário sem apagar as
+/// subscriptions dos dispositivos.
+model UserNotificationPreference {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  emailEnabled    Boolean  @default(true)
+  whatsappEnabled Boolean  @default(false)
+  pushEnabled     Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_notification_preferences")
+}
+
+// ---------------------------------------------------------------------
+// E-mail
+// ---------------------------------------------------------------------
+
+enum EmailDeliveryType {
+  SIGNATURE_LINK
+  NOTIFICATION
+}
+
+enum EmailDeliveryStatus {
+  SENT
+  FAILED
+}
+
+/// Registro de entrega de e-mail automático. NUNCA guarda o corpo da mensagem nem o token/link de
+/// assinatura; `errorMessage` é sanitizado (sem URLs nem tokens).
+model EmailDelivery {
+  id                String              @id @default(uuid())
+  officeId          String
+  createdById       String?
+  contractId        String?
+  recipient         String
+  type              EmailDeliveryType
+  status            EmailDeliveryStatus
+  provider          String
+  providerMessageId String?
+  errorCode         String?
+  errorMessage      String?
+  createdAt         DateTime            @default(now())
+  sentAt            DateTime?
+
+  office    Office @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([officeId, createdAt])
+  @@index([contractId])
+  @@map("email_deliveries")
+}
+
+// ---------------------------------------------------------------------
+// Autenticação em dois fatores (TOTP)
+// ---------------------------------------------------------------------
+
+/// Configuração de 2FA (TOTP) de um usuário ADMIN/LAWYER. O segredo fica CRIPTOGRAFADO em repouso
+/// (AES-256-GCM, chave TWO_FACTOR_ENCRYPTION_KEY) e nunca é devolvido pela API depois do setup.
+/// `enabled = false` = setup iniciado e ainda não confirmado com um código válido.
+model UserTwoFactor {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  secretEncrypted String
+  enabled         Boolean   @default(false)
+  enabledAt       DateTime?
+  /// Último passo de tempo TOTP aceito: impede reutilizar o mesmo código (replay).
+  lastUsedStep    BigInt?
+  failedAttempts  Int       @default(0)
+  lockedUntil     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_two_factor")
+}
+
+/// Código de recuperação de uso único. Só o HMAC-SHA256 é armazenado; o código em texto puro é
+/// mostrado ao usuário uma única vez, na ativação.
+model UserBackupCode {
+  id        String    @id @default(uuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, codeHash])
+  @@index([userId])
+  @@map("user_backup_codes")
 }
 
 // ---------------------------------------------------------------------

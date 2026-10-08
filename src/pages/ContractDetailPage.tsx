@@ -2,9 +2,13 @@ import { useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Send, Download, FileText, Check, Edit2, CreditCard,
-  Clock, AlertCircle, Upload, Paperclip
+  Clock, AlertCircle, Upload, Paperclip, RefreshCw, ListPlus
 } from 'lucide-react';
 import ContractPdfPanel from '../components/ContractPdfPanel';
+import ContractReviewPanel from '../components/ContractReviewPanel';
+import GenerateInstallmentsDialog from '../components/GenerateInstallmentsDialog';
+import PixPaymentDialog from '../components/PixPaymentDialog';
+import RenewContractModal from '../components/RenewContractModal';
 import ContractSignaturePanel from '../components/ContractSignaturePanel';
 import StatusBadge from '../components/StatusBadge';
 import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
@@ -19,6 +23,7 @@ import type { ContractStatusApi, DocumentCategoryApi, Payment, PaymentMethodApi 
 const STATUS_OPTIONS: { value: ContractStatusApi; label: string }[] = [
   { value: 'rascunho', label: 'Rascunho' },
   { value: 'pronto_envio', label: 'Pronto p/ envio' },
+  { value: 'aprovado', label: 'Aprovado' },
   { value: 'enviado', label: 'Enviado' },
   { value: 'em_revisao', label: 'Em revisão' },
   { value: 'assinado', label: 'Assinado' },
@@ -34,7 +39,8 @@ const STATUS_OPTIONS: { value: ContractStatusApi; label: string }[] = [
 // backend vai rejeitar com 409.
 const STATUS_TRANSITIONS: Record<ContractStatusApi, ContractStatusApi[]> = {
   rascunho: ['pronto_envio', 'enviado', 'cancelado'],
-  pronto_envio: ['enviado', 'cancelado'],
+  pronto_envio: ['aprovado', 'enviado', 'rascunho', 'cancelado'],
+  aprovado: ['enviado', 'rascunho', 'cancelado'],
   enviado: ['em_revisao', 'assinado', 'cancelado'],
   em_revisao: ['enviado', 'assinado', 'cancelado'],
   assinado: ['ativo', 'cancelado'],
@@ -46,10 +52,24 @@ const STATUS_TRANSITIONS: Record<ContractStatusApi, ContractStatusApi[]> = {
 const PAYMENT_METHODS: PaymentMethodApi[] = ['PIX', 'Transferência', 'Boleto', 'Dinheiro', 'Cartão'];
 const DOC_CATEGORIES: DocumentCategoryApi[] = ['contrato', 'procuração', 'documento', 'outro'];
 
+/**
+ * Opções do seletor de status. `aprovado` e a volta para `rascunho` têm ações próprias (painel "Revisão
+ * interna"), e com a aprovação ativa o envio ao cliente só sai de `aprovado`. O backend revalida tudo.
+ */
+function selectableStatuses(from: ContractStatusApi, requireApproval: boolean): ContractStatusApi[] {
+  return STATUS_TRANSITIONS[from].filter((to) => {
+    if (to === 'aprovado') return false;
+    if (to === 'rascunho' && (from === 'pronto_envio' || from === 'aprovado')) return false;
+    if (requireApproval && to === 'pronto_envio') return false;
+    if (requireApproval && to === 'enviado' && from !== 'aprovado' && from !== 'em_revisao') return false;
+    return true;
+  });
+}
+
 export default function ContractDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, office } = useAuth();
   const canManageContract = user?.role === 'ADMIN' || user?.role === 'LAWYER';
   const [activeTab, setActiveTab] = useState('resumo');
 
@@ -72,9 +92,10 @@ export default function ContractDetailPage() {
     [id],
   );
 
-  const availableStatusOptions = contract
-    ? STATUS_OPTIONS.filter(o => STATUS_TRANSITIONS[contract.status].includes(o.value))
-    : [];
+  const availableStatusOptions =
+    contract && canManageContract
+      ? STATUS_OPTIONS.filter(o => selectableStatuses(contract.status, office?.requireInternalApproval ?? false).includes(o.value))
+      : [];
 
   const contractPayments = paymentsData?.data ?? [];
   const totalPaid = contractPayments.filter(p => p.status === 'pago').reduce((s, p) => s + p.value, 0);
@@ -86,7 +107,13 @@ export default function ContractDetailPage() {
   const currentPdf =
     currentVersionNumber === null
       ? null
-      : (contractDocs.find((d) => d.fileType === 'PDF' && d.versionNumber === currentVersionNumber) ?? null);
+      : (contractDocs.find((d) => d.fileType === 'PDF' && !d.signed && d.versionNumber === currentVersionNumber) ?? null);
+
+  // --- Renovação / parcelas / Pix -------------------------------------
+  const [showRenew, setShowRenew] = useState(false);
+  const [showGenerate, setShowGenerate] = useState(false);
+  const [pixPayment, setPixPayment] = useState<Payment | null>(null);
+  const canRenew = canManageContract && (contract?.status === 'ativo' || contract?.status === 'assinado');
 
   // --- Status change -------------------------------------------------
   const [statusDraft, setStatusDraft] = useState<ContractStatusApi | ''>('');
@@ -256,6 +283,11 @@ export default function ContractDetailPage() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {canRenew && (
+              <button onClick={() => setShowRenew(true)} className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold border rounded-lg hover:bg-slate-50 text-slate-700" style={{ borderColor: 'var(--color-border)' }}>
+                <RefreshCw size={14} /> Renovar contrato
+              </button>
+            )}
             <select
               value={statusDraft || contract.status}
               onChange={e => setStatusDraft(e.target.value as ContractStatusApi)}
@@ -308,6 +340,8 @@ export default function ContractDetailPage() {
         </div>
       </div>
 
+      <ContractReviewPanel contract={contract} onChanged={refetchContract} />
+
       {/* Tabs */}
       <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: 'var(--color-border)' }}>
         <div className="flex border-b overflow-x-auto" style={{ borderColor: 'var(--color-border)' }}>
@@ -359,7 +393,10 @@ export default function ContractDetailPage() {
                       <span className="text-sm font-medium text-slate-700">Editar contrato</span>
                     </button>
                   )}
-                  {(contract.status === 'rascunho' || contract.status === 'pronto_envio') && (
+                  {canManageContract &&
+                    (office?.requireInternalApproval
+                      ? contract.status === 'aprovado'
+                      : contract.status === 'rascunho' || contract.status === 'pronto_envio' || contract.status === 'aprovado') && (
                     <button onClick={() => applyStatus('enviado')} disabled={statusUpdating} className="w-full flex items-center gap-3 p-3 rounded-lg border hover:bg-slate-50 transition-colors text-left disabled:opacity-50" style={{ borderColor: 'var(--color-border)' }}>
                       <Send size={15} style={{ color: 'var(--color-primary)' }} />
                       <span className="text-sm font-medium text-slate-700">Enviar para assinatura</span>
@@ -453,7 +490,12 @@ export default function ContractDetailPage() {
 
           {activeTab === 'pagamentos' && (
             <div>
-              <div className="flex justify-end mb-3">
+              <div className="flex justify-end gap-2 mb-3">
+                {canManageContract && (
+                  <button onClick={() => setShowGenerate(true)} className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-slate-700" style={{ borderColor: 'var(--color-border)' }}>
+                    <ListPlus size={13} /> Gerar parcelas
+                  </button>
+                )}
                 <button onClick={() => setShowNewPayment(true)} className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white" style={{ backgroundColor: 'var(--color-primary)' }}>
                   + Nova parcela
                 </button>
@@ -488,6 +530,16 @@ export default function ContractDetailPage() {
                     <div className="text-sm font-semibold tabular-nums" style={{ fontFamily: 'var(--font-mono)' }}>
                       {p.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </div>
+                    {p.status !== 'pago' && p.status !== 'cancelado' && (
+                      <button
+                        onClick={() => setPixPayment(p)}
+                        className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border hover:bg-slate-50 text-slate-600 flex-shrink-0"
+                        style={{ borderColor: 'var(--color-border)' }}
+                        title={p.pixCode ? 'Copiar Pix / QR Code' : 'Cadastrar Pix copia e cola'}
+                      >
+                        Pix{p.pixCode ? ' ✓' : ''}
+                      </button>
+                    )}
                     {p.status !== 'pago' && p.status !== 'cancelado' && (
                       <button
                         onClick={() => { setRegisteringPayment(p); setRegisterMethod('PIX'); }}
@@ -625,6 +677,10 @@ export default function ContractDetailPage() {
         </div>
       )}
 
+      {showRenew && <RenewContractModal contract={contract} onClose={() => setShowRenew(false)} onRenewed={refetchContract} />}
+      {showGenerate && <GenerateInstallmentsDialog contract={contract} onClose={() => setShowGenerate(false)} onGenerated={refetchPayments} />}
+      {pixPayment && <PixPaymentDialog payment={pixPayment} onClose={() => setPixPayment(null)} onSaved={refetchPayments} />}
+
       {/* Register payment modal */}
       {registeringPayment && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -640,6 +696,9 @@ export default function ContractDetailPage() {
               <select value={registerMethod} onChange={e => setRegisterMethod(e.target.value as PaymentMethodApi)} className="w-full px-3 py-2 text-sm border rounded-lg" style={{ borderColor: 'var(--color-border)' }}>
                 {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
+              {registerMethod === 'PIX' && (
+                <p className="mt-2 text-xs" style={{ color: '#1E40AF' }}>Pagamento via PIX requer confirmação manual: registre somente depois de conferir o recebimento.</p>
+              )}
             </div>
             <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: 'var(--color-border)' }}>
               <button onClick={() => setRegisteringPayment(null)} className="px-4 py-2 text-sm font-medium border rounded-lg hover:bg-slate-50 text-slate-600" style={{ borderColor: 'var(--color-border)' }}>Cancelar</button>

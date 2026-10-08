@@ -6,6 +6,7 @@ export interface UpdateOfficeInput {
   phone?: string;
   address?: string;
   specialties?: string;
+  requireInternalApproval?: boolean;
 }
 
 export const officesService = {

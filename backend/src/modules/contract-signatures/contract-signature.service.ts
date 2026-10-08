@@ -15,6 +15,8 @@ import { notifyPushEvent } from '../notifications/push-recipients';
 import { PUSH_EVENT_TYPES, type PushNotifier } from '../notifications/push.types';
 import { maskDocument } from '../../shared/utils/br-document';
 import type { SignContractBody } from './contract-signature.schemas';
+import type { SignatureEmailStatus, SignatureLinkMailer } from './signature-link-mailer';
+import type { SignedPdfService } from './signed-pdf.service';
 
 type PrismaDeps = Pick<
   PrismaClient,
@@ -27,6 +29,15 @@ export interface SignatureServiceConfig {
   expirationHours: number;
   /** Web Push opcional (responsável + ADMINs, conforme a política central) quando o contrato é assinado. */
   push?: PushNotifier;
+  /** Gera o PDF final com comprovante após o aceite (falha nunca desfaz a assinatura). */
+  signedPdf?: Pick<SignedPdfService, 'generateAfterSignature'>;
+  /** Envio opcional do link por e-mail ao cliente (provider configurável; ausente = sem e-mail). */
+  mailer?: SignatureLinkMailer;
+}
+
+export interface CreateLinkOptions {
+  /** true = além de gerar o link, tenta enviá-lo por e-mail ao cliente (não bloqueia a criação). */
+  sendEmail?: boolean;
 }
 
 export interface SignatureActor {
@@ -75,7 +86,16 @@ export class ContractSignatureService {
   async createLink(
     actor: SignatureActor,
     contractId: string,
-  ): Promise<{ url: string; expiresAt: Date; singleUse: true; signatureId: string; versionNumber: number }> {
+    options: CreateLinkOptions = {},
+  ): Promise<{
+    url: string;
+    expiresAt: Date;
+    singleUse: true;
+    signatureId: string;
+    versionNumber: number;
+    /** Presente somente quando `sendEmail` foi solicitado. */
+    email?: SignatureEmailStatus;
+  }> {
     if (!this.config.publicAppUrl) {
       throw new ConflictError('A URL pública do sistema não está configurada no servidor (PUBLIC_APP_URL).');
     }
@@ -87,6 +107,8 @@ export class ContractSignatureService {
         id: true,
         number: true,
         status: true,
+        client: { select: { name: true, email: true } },
+        office: { select: { name: true } },
         versions: { orderBy: { versionNumber: 'desc' }, take: 1, select: { id: true, versionNumber: true } },
       },
     });
@@ -133,13 +155,57 @@ export class ContractSignatureService {
       return created;
     });
 
+    const url = `${this.config.publicAppUrl}/assinar/${token}`;
+
+    let email: SignatureEmailStatus | undefined;
+    if (options.sendEmail) {
+      email = await this.emailLink(actor, { id: contract.id, number: contract.number, client: contract.client, officeName: contract.office.name }, url, expiresAt);
+    }
+
     return {
-      url: `${this.config.publicAppUrl}/assinar/${token}`,
+      url,
       expiresAt,
       singleUse: true,
       signatureId: signature.id,
       versionNumber: version.versionNumber,
+      ...(email ? { email } : {}),
     };
+  }
+
+  /** E-mail best-effort: qualquer falha vira o status 'failed' — o link já foi criado e é devolvido normalmente. */
+  private async emailLink(
+    actor: SignatureActor,
+    contract: { id: string; number: number; client: { name: string; email: string }; officeName: string },
+    url: string,
+    expiresAt: Date,
+  ): Promise<SignatureEmailStatus> {
+    const mailer = this.config.mailer;
+    if (!mailer) return 'unavailable';
+    try {
+      const status = await mailer.send({
+        officeId: actor.officeId,
+        senderUserId: actor.userId,
+        contractId: contract.id,
+        contractNumber: contract.number,
+        officeName: contract.officeName,
+        client: contract.client,
+        url,
+        expiresAt,
+      });
+      if (status === 'sent') {
+        await writeAuditLog(this.prisma, {
+          officeId: actor.officeId,
+          actorId: actor.userId,
+          action: AUDIT_ACTIONS.SIGNATURE_LINK_EMAILED,
+          entityType: 'Contract',
+          entityId: contract.id,
+          entityLabel: `Contrato #${contract.number}`,
+        }).catch(() => undefined);
+      }
+      return status;
+    } catch {
+      return 'failed';
+    }
   }
 
   /** Histórico de links/aceites do contrato (sem token nem tokenHash). */
@@ -152,12 +218,16 @@ export class ContractSignatureService {
       where: { contractId, officeId },
       orderBy: { createdAt: 'desc' },
       take: 20,
-      include: { contractVersion: { select: { versionNumber: true } } },
+      include: { contractVersion: { select: { versionNumber: true } }, signedDocument: { select: { id: true } } },
     });
 
     return rows.map((row) => ({
       id: row.id,
       state: signatureLinkState(row, now),
+      firstOpenedAt: row.firstOpenedAt,
+      lastOpenedAt: row.lastOpenedAt,
+      openCount: row.openCount,
+      signedDocumentId: row.signedDocument?.id ?? null,
       versionNumber: row.contractVersion.versionNumber,
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
@@ -176,6 +246,7 @@ export class ContractSignatureService {
   /** Dados mínimos para o signatário ler e decidir. Valida tudo no backend. */
   async getPublicView(token: string) {
     const sig = await this.loadAndValidate(token);
+    await this.trackOpen(sig.id);
 
     return {
       officeName: sig.contract.office.name,
@@ -196,6 +267,28 @@ export class ContractSignatureService {
       singleUse: true as const,
       consent: { text: CONSENT_TEXT, version: CONSENT_TEXT_VERSION },
     };
+  }
+
+  /**
+   * Rastreia a abertura da página pública (firstOpenedAt / lastOpenedAt / openCount). Só é chamado
+   * depois de o token ser validado; usa o id do registro (nunca o token). Falha de rastreamento
+   * NUNCA impede o signatário de ler o contrato.
+   */
+  private async trackOpen(signatureId: string): Promise<void> {
+    const now = this.now();
+    try {
+      // 1ª abertura: UPDATE condicional (firstOpenedAt IS NULL) — atômico mesmo com aberturas simultâneas.
+      await this.prisma.contractPublicSignature.updateMany({
+        where: { id: signatureId, firstOpenedAt: null },
+        data: { firstOpenedAt: now },
+      });
+      await this.prisma.contractPublicSignature.update({
+        where: { id: signatureId },
+        data: { lastOpenedAt: now, openCount: { increment: 1 } },
+      });
+    } catch {
+      // intencionalmente ignorado
+    }
   }
 
   /**
@@ -269,6 +362,14 @@ export class ContractSignatureService {
         priority: true,
       });
     });
+
+    // PDF final com comprovante: depois do commit, e uma falha NUNCA desfaz o aceite (o método
+    // não lança; em caso de erro registra auditoria e o PDF é regenerado sob demanda).
+    try {
+      await this.config.signedPdf?.generateAfterSignature(sig.id);
+    } catch {
+      // defesa extra: o aceite já está confirmado e nada secundário pode revertê-lo nem falhar a resposta
+    }
 
     // Depois do commit e sem aguardar: quem assina pelo link público não espera a consulta de
     // destinatários nem o serviço de push do navegador. notifyPushEvent nunca lança; o catch é

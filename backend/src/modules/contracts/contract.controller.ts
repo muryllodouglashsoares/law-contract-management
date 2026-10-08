@@ -3,19 +3,30 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { prisma } from '../../shared/database/prisma';
 import { toPublicContract } from '../../shared/utils/serialize-contract';
 import { toPublicDocument } from '../../shared/utils/serialize-document';
+import { notificationDispatcher } from '../notifications/notification.instance';
 import { DocumentService } from '../documents/document.service';
 import type {
   ContractIdParams,
   CreateContractBody,
   GenerateContractPdfBody,
+  RejectContractBody,
+  RenewContractBody,
   ListContractsQuery,
   UpdateContractBody,
   UpdateContractStatusBody,
 } from './contract.schemas';
+import { ContractReviewService } from './contract-review.service';
 import { ContractService } from './contract.service';
 
 const contractService = new ContractService(prisma);
 const documentService = new DocumentService(prisma);
+const reviewService = new ContractReviewService(prisma, notificationDispatcher);
+
+const actorOf = (request: FastifyRequest) => ({
+  userId: request.user.userId,
+  officeId: request.user.officeId,
+  role: request.user.role,
+});
 
 export const contractController = {
   async list(request: FastifyRequest<{ Querystring: ListContractsQuery }>, reply: FastifyReply) {
@@ -59,7 +70,7 @@ export const contractController = {
 
   async create(request: FastifyRequest<{ Body: CreateContractBody }>, reply: FastifyReply) {
     const contract = await contractService.create(
-      { userId: request.user.userId, officeId: request.user.officeId },
+      actorOf(request),
       request.body,
     );
     return reply.status(201).send({ contract: toPublicContract(contract) });
@@ -70,7 +81,7 @@ export const contractController = {
     reply: FastifyReply,
   ) {
     const contract = await contractService.update(
-      { userId: request.user.userId, officeId: request.user.officeId },
+      actorOf(request),
       request.params.id,
       request.body,
     );
@@ -86,6 +97,29 @@ export const contractController = {
       request.params.id,
       request.body.status,
     );
+    return reply.status(200).send({ contract: toPublicContract(contract) });
+  },
+
+  async renew(request: FastifyRequest<{ Params: ContractIdParams; Body: RenewContractBody }>, reply: FastifyReply) {
+    const contract = await contractService.renew(actorOf(request), request.params.id, request.body);
+    return reply.status(200).send({ contract: toPublicContract(contract) });
+  },
+
+  async submitReview(request: FastifyRequest<{ Params: ContractIdParams }>, reply: FastifyReply) {
+    await reviewService.submit(actorOf(request), request.params.id);
+    const contract = await contractService.getById(request.user.officeId, request.params.id);
+    return reply.status(200).send({ contract: toPublicContract(contract) });
+  },
+
+  async approve(request: FastifyRequest<{ Params: ContractIdParams }>, reply: FastifyReply) {
+    await reviewService.approve(actorOf(request), request.params.id);
+    const contract = await contractService.getById(request.user.officeId, request.params.id);
+    return reply.status(200).send({ contract: toPublicContract(contract) });
+  },
+
+  async reject(request: FastifyRequest<{ Params: ContractIdParams; Body: RejectContractBody }>, reply: FastifyReply) {
+    await reviewService.reject(actorOf(request), request.params.id, request.body.reason);
+    const contract = await contractService.getById(request.user.officeId, request.params.id);
     return reply.status(200).send({ contract: toPublicContract(contract) });
   },
 };

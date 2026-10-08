@@ -8,6 +8,8 @@ export type ContractWithRelations = Contract & {
   template: { id: string; name: string };
   responsible: { id: string; name: string };
   versions: ContractVersion[];
+  reviewSubmittedBy?: { id: string; name: string } | null;
+  reviewDecidedBy?: { id: string; name: string } | null;
 };
 
 export interface PublicContract {
@@ -27,6 +29,15 @@ export interface PublicContract {
   template: { id: string; name: string };
   responsible: { id: string; name: string };
   currentVersion: { versionNumber: number; content: string; createdAt: string } | null;
+  /** Último ciclo da revisão interna (aprovação). Campos nulos = contrato nunca foi enviado para revisão. */
+  internalReview: {
+    submittedBy: { id: string; name: string } | null;
+    submittedAt: string | null;
+    decision: 'approved' | 'rejected' | null;
+    decidedBy: { id: string; name: string } | null;
+    decidedAt: string | null;
+    rejectionReason: string | null;
+  };
 }
 
 export function toPublicContract(contract: ContractWithRelations): PublicContract {
@@ -53,6 +64,14 @@ export function toPublicContract(contract: ContractWithRelations): PublicContrac
     },
     template: contract.template,
     responsible: contract.responsible,
+    internalReview: {
+      submittedBy: contract.reviewSubmittedBy ?? null,
+      submittedAt: contract.reviewSubmittedAt ? contract.reviewSubmittedAt.toISOString() : null,
+      decision: contract.reviewDecision ? (contract.reviewDecision === 'APPROVED' ? 'approved' : 'rejected') : null,
+      decidedBy: contract.reviewDecidedBy ?? null,
+      decidedAt: contract.reviewDecidedAt ? contract.reviewDecidedAt.toISOString() : null,
+      rejectionReason: contract.reviewRejectionReason,
+    },
     currentVersion: currentVersion
       ? {
           versionNumber: currentVersion.versionNumber,

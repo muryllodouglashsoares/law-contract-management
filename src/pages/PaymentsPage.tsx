@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TrendingUp, AlertCircle, Clock, CreditCard, Search, Plus, Check } from 'lucide-react';
+import PixPaymentDialog from '../components/PixPaymentDialog';
 import StatusBadge from '../components/StatusBadge';
 import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
 import { paymentsService } from '../services/payments';
@@ -38,6 +39,8 @@ export default function PaymentsPage() {
   const filteredBySearch = search
     ? payments.filter(p => p.contract.client.name.toLowerCase().includes(search.toLowerCase()) || String(p.contract.number).includes(search))
     : payments;
+
+  const [pixPayment, setPixPayment] = useState<Payment | null>(null);
 
   // --- Registrar pagamento existente (marcar como pago) -----------------
   const [registering, setRegistering] = useState<Payment | null>(null);
@@ -198,6 +201,16 @@ export default function PaymentsPage() {
                 <td className="px-5 py-3.5 text-right">
                   {p.status !== 'pago' && p.status !== 'cancelado' && (
                     <button
+                      onClick={() => setPixPayment(p)}
+                      className="text-xs font-medium px-2.5 py-1.5 rounded-lg border hover:bg-slate-50 text-slate-600 mr-1.5"
+                      style={{ borderColor: 'var(--color-border)' }}
+                      title={p.pixCode ? 'Copiar Pix / QR Code' : 'Cadastrar Pix copia e cola'}
+                    >
+                      Pix{p.pixCode ? ' ✓' : ''}
+                    </button>
+                  )}
+                  {p.status !== 'pago' && p.status !== 'cancelado' && (
+                    <button
                       onClick={() => { setRegistering(p); setRegisterMethod('PIX'); }}
                       className="text-xs font-medium px-2.5 py-1.5 rounded-lg text-white hover:opacity-90 transition-opacity"
                       style={{ backgroundColor: '#059669' }}
@@ -223,6 +236,8 @@ export default function PaymentsPage() {
       </div>
 
       {/* Register (mark as paid) modal */}
+      {pixPayment && <PixPaymentDialog payment={pixPayment} onClose={() => setPixPayment(null)} onSaved={refetch} />}
+
       {registering && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
@@ -237,6 +252,9 @@ export default function PaymentsPage() {
               <select value={registerMethod} onChange={e => setRegisterMethod(e.target.value as PaymentMethodApi)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 bg-white" style={{ borderColor: 'var(--color-border)' }}>
                 {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
+              {registerMethod === 'PIX' && (
+                <p className="mt-2 text-xs" style={{ color: '#1E40AF' }}>Pagamento via PIX requer confirmação manual: registre somente depois de conferir o recebimento.</p>
+              )}
             </div>
             <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: 'var(--color-border)' }}>
               <button onClick={() => setRegistering(null)} className="px-4 py-2 text-sm font-medium border rounded-lg hover:bg-slate-50 text-slate-600" style={{ borderColor: 'var(--color-border)' }}>Cancelar</button>

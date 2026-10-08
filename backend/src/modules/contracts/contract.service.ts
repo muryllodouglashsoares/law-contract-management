@@ -7,6 +7,7 @@ import type {
   ContractVersion,
   PrismaClient,
   User,
+  UserRole,
 } from '@prisma/client';
 
 import { AUDIT_ACTIONS, writeAuditLog } from '../../shared/domain/audit';
@@ -15,9 +16,13 @@ import { buildContractTemplateVariables, renderTemplate } from '../../shared/dom
 import {
   CONTRACT_STATUS_FROM_API,
   CONTRACT_STATUS_TO_API,
+  RENEWAL_ALERT_CONTRACT_STATUSES,
   contractStatusTransitionsFrom,
+  isTransitionBlockedForGenericStatusUpdate,
 } from '../../shared/domain/status-map';
-import { ConflictError, NotFoundError, ValidationError } from '../../shared/errors';
+import { AuthorizationError, ConflictError, NotFoundError, ValidationError } from '../../shared/errors';
+import { formatDateBR } from '../../shared/utils/dates';
+import { applyPercentAdjustment } from '../../shared/utils/money';
 import { generateContractPdf } from '../../shared/pdf/contract-pdf';
 import { getStorage, removeQuietly, type StorageDriver } from '../../shared/storage';
 import { keyBelongsToOffice } from '../../shared/storage/storage-key';
@@ -35,6 +40,8 @@ const CONTRACT_INCLUDE = {
   client: { select: { id: true, name: true, document: true, email: true, phone: true } },
   template: { select: { id: true, name: true } },
   responsible: { select: { id: true, name: true } },
+  reviewSubmittedBy: { select: { id: true, name: true } },
+  reviewDecidedBy: { select: { id: true, name: true } },
   versions: { orderBy: { versionNumber: 'desc' as const }, take: 1 },
 };
 
@@ -57,6 +64,8 @@ const CONTENT_AFFECTING_FIELDS = [
 export interface ContractActor {
   userId: string;
   officeId: string;
+  /** Papel da sessão. Quando ASSISTANT, só pode editar contratos de que é responsável. */
+  role?: UserRole;
 }
 
 type PrismaDeps = Pick<
@@ -198,6 +207,9 @@ export class ContractService {
     if (existing.status !== 'RASCUNHO') {
       throw new ConflictError('Só é possível editar um contrato enquanto ele está em rascunho');
     }
+    if (actor.role === 'ASSISTANT' && existing.responsible.id !== actor.userId) {
+      throw new AuthorizationError('Você só pode editar os contratos pelos quais é responsável');
+    }
 
     // Regra de negócio no backend (nunca só no frontend): término >= início, considerando
     // o valor persistido quando apenas um dos dois campos é enviado.
@@ -272,6 +284,19 @@ export class ContractService {
       return existing;
     }
 
+    const office = await this.prisma.office.findUnique({
+      where: { id: actor.officeId },
+      select: { requireInternalApproval: true },
+    });
+    const guard = isTransitionBlockedForGenericStatusUpdate(
+      existing.status as ContractStatus,
+      target,
+      office?.requireInternalApproval ?? false,
+    );
+    if (guard.blocked) {
+      throw new ConflictError(guard.reason ?? 'Transição não permitida');
+    }
+
     const allowedTransitions = contractStatusTransitionsFrom(existing.status as ContractStatus);
     if (!allowedTransitions.includes(target)) {
       throw new ConflictError(
@@ -309,6 +334,91 @@ export class ContractService {
           description: `O contrato #${contract.number} de ${existing.client.name} agora está "${CONTRACT_STATUS_TO_API(target)}".`,
         });
       }
+    });
+
+    return this.getById(actor.officeId, id);
+  }
+
+  /**
+   * Renovação em um clique (ADMIN/LAWYER — garantido na rota).
+   *
+   * Regra jurídica segura: renovar muda dados que fazem parte do texto contratual (data de término
+   * e, com reajuste, o valor). Por isso a renovação NUNCA edita a versão assinada: ela cria uma NOVA
+   * ContractVersion (com `changeNote`), mantendo intactas a versão aceita, seu hash e o PDF assinado.
+   * O status do contrato não muda (continua ATIVO/ASSINADO), e o ciclo de alertas de renovação é
+   * reiniciado (renewalAlertSentAt/ForEndDate = null) na MESMA transação.
+   */
+  async renew(
+    actor: ContractActor,
+    id: string,
+    input: { newEndDate: Date; adjustmentPercent?: number },
+  ): Promise<ContractWithRelations> {
+    const existing = await this.getById(actor.officeId, id);
+
+    if (!RENEWAL_ALERT_CONTRACT_STATUSES.includes(existing.status)) {
+      throw new ConflictError('Só é possível renovar contratos ativos ou assinados');
+    }
+
+    const baseline = existing.endDate ?? existing.startDate;
+    if (input.newEndDate.getTime() <= baseline.getTime()) {
+      throw new ValidationError('Dados inválidos no corpo da requisição', [
+        {
+          path: 'newEndDate',
+          message: existing.endDate
+            ? 'A nova data de término deve ser posterior à data de término atual'
+            : 'A nova data de término deve ser posterior à data de início',
+        },
+      ]);
+    }
+
+    const newValue =
+      input.adjustmentPercent !== undefined ? applyPercentAdjustment(existing.value, input.adjustmentPercent) : existing.value;
+    const note =
+      `Renovação até ${formatDateBR(input.newEndDate)}` +
+      (input.adjustmentPercent !== undefined ? ` com reajuste de ${input.adjustmentPercent}%` : '');
+
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Condicional: se o contrato mudou de status/endDate depois da leitura, nada é gravado.
+      const claimed = await tx.contract.updateMany({
+        where: { id, officeId: actor.officeId, status: { in: RENEWAL_ALERT_CONTRACT_STATUSES }, endDate: existing.endDate },
+        data: {
+          endDate: input.newEndDate,
+          value: newValue,
+          // Reinicia o ciclo de alertas de renovação (obrigatório).
+          renewalAlertSentAt: null,
+          renewalAlertForEndDate: null,
+        },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictError('O contrato foi alterado por outra operação. Recarregue e tente novamente.');
+      }
+
+      const [contract, lawyer, office, lastVersion] = await Promise.all([
+        tx.contract.findUniqueOrThrow({ where: { id }, include: { client: true, template: true } }),
+        tx.user.findUniqueOrThrow({ where: { id: existing.responsible.id } }),
+        tx.office.findUniqueOrThrow({ where: { id: actor.officeId } }),
+        tx.contractVersion.findFirst({ where: { contractId: id }, orderBy: { versionNumber: 'desc' } }),
+      ]);
+
+      await tx.contractVersion.create({
+        data: {
+          contractId: id,
+          versionNumber: (lastVersion?.versionNumber ?? 0) + 1,
+          content: this.renderContractContent(contract.template, contract.client, contract, lawyer, office),
+          authorId: actor.userId,
+          changeNote: note,
+        },
+      });
+
+      await writeAuditLog(tx, {
+        officeId: actor.officeId,
+        actorId: actor.userId,
+        action: AUDIT_ACTIONS.CONTRACT_RENEWED,
+        entityType: 'Contract',
+        entityId: id,
+        // Sem valores financeiros no rótulo.
+        entityLabel: `Contrato #${contract.number} (até ${formatDateBR(input.newEndDate)})`,
+      });
     });
 
     return this.getById(actor.officeId, id);

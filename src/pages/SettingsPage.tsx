@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { User, Building2, Shield, Sliders, Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
 import BrowserNotificationsSetting from '../components/BrowserNotificationsSetting';
+import NotificationPreferencesSetting from '../components/NotificationPreferencesSetting';
+import TwoFactorSettings from '../components/TwoFactorSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { toErrorMessage } from '../hooks/useApiQuery';
 import { usersService } from '../services/users';
@@ -21,7 +23,6 @@ function initialsOf(name: string): string {
 export default function SettingsPage() {
   const { user, office, refresh } = useAuth();
   const [tab, setTab] = useState('perfil');
-  const [notifications, setNotifications] = useState({ email: true, whatsapp: false });
 
   // --- Perfil -----------------------------------------------------------
   const [profileForm, setProfileForm] = useState({ name: '', phone: '', oabNumber: '' });
@@ -51,13 +52,13 @@ export default function SettingsPage() {
   }
 
   // --- Escritório ---------------------------------------------------------
-  const [officeForm, setOfficeForm] = useState({ name: '', phone: '', address: '', specialties: '' });
+  const [officeForm, setOfficeForm] = useState({ name: '', phone: '', address: '', specialties: '', requireInternalApproval: false });
   const [officeSaving, setOfficeSaving] = useState(false);
   const [officeMessage, setOfficeMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const canEditOffice = user?.role === 'ADMIN';
 
   useEffect(() => {
-    if (office) setOfficeForm({ name: office.name, phone: office.phone ?? '', address: office.address ?? '', specialties: office.specialties ?? '' });
+    if (office) setOfficeForm({ name: office.name, phone: office.phone ?? '', address: office.address ?? '', specialties: office.specialties ?? '', requireInternalApproval: office.requireInternalApproval });
   }, [office]);
 
   async function saveOffice() {
@@ -69,6 +70,7 @@ export default function SettingsPage() {
         phone: officeForm.phone || undefined,
         address: officeForm.address || undefined,
         specialties: officeForm.specialties || undefined,
+        requireInternalApproval: officeForm.requireInternalApproval,
       });
       await refresh();
       setOfficeMessage({ type: 'success', text: 'Dados do escritório atualizados.' });
@@ -213,6 +215,22 @@ export default function SettingsPage() {
                     <label className="block text-xs font-medium text-slate-700 mb-1.5">Especialidades</label>
                     <input disabled={!canEditOffice} value={officeForm.specialties} onChange={e => setOfficeForm(f => ({ ...f, specialties: e.target.value }))} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 bg-white disabled:bg-slate-50 disabled:text-slate-400" style={{ borderColor: 'var(--color-border)' }} />
                   </div>
+                  <div className="md:col-span-2 flex items-start gap-3 p-3 rounded-lg bg-slate-50">
+                    <input
+                      id="require-approval"
+                      type="checkbox"
+                      disabled={!canEditOffice}
+                      checked={officeForm.requireInternalApproval}
+                      onChange={e => setOfficeForm(f => ({ ...f, requireInternalApproval: e.target.checked }))}
+                      className="mt-0.5 w-4 h-4 accent-blue-700"
+                    />
+                    <label htmlFor="require-approval" className="text-sm text-slate-700">
+                      <span className="font-medium">Exigir aprovação interna antes de enviar contratos</span>
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        Assistentes passam a redigir e enviar para revisão; só um administrador ou advogado aprova e libera o envio ao cliente.
+                      </span>
+                    </label>
+                  </div>
                 </div>
               </div>
             )}
@@ -263,6 +281,7 @@ export default function SettingsPage() {
                     {passwordSaving ? 'Salvando...' : 'Alterar senha'}
                   </button>
                 </div>
+                <TwoFactorSettings />
               </div>
             )}
 
@@ -273,25 +292,7 @@ export default function SettingsPage() {
                   <div className="pb-5 border-b" style={{ borderColor: 'var(--color-border)' }}>
                     <h3 className="text-xs font-semibold text-slate-700 mb-1">Notificações</h3>
                     <BrowserNotificationsSetting />
-                    <p className="text-xs text-slate-400 mt-3 mb-1">As preferências de e-mail e WhatsApp ainda não são salvas no servidor — válidas apenas nesta sessão.</p>
-                    {[
-                      { key: 'email', label: 'E-mail', desc: 'Receber alertas por e-mail' },
-                      { key: 'whatsapp', label: 'WhatsApp', desc: 'Alertas via WhatsApp' },
-                    ].map(n => (
-                      <div key={n.key} className="flex items-center justify-between py-3 border-b last:border-0" style={{ borderColor: 'var(--color-border)' }}>
-                        <div>
-                          <div className="text-sm font-medium text-slate-800">{n.label}</div>
-                          <div className="text-xs text-slate-400">{n.desc}</div>
-                        </div>
-                        <button
-                          onClick={() => setNotifications(prev => ({ ...prev, [n.key]: !prev[n.key as keyof typeof prev] }))}
-                          className={`relative w-10 rounded-full transition-colors ${notifications[n.key as keyof typeof notifications] ? 'bg-blue-600' : 'bg-slate-200'}`}
-                          style={{ height: '22px' }}
-                        >
-                          <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${notifications[n.key as keyof typeof notifications] ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                        </button>
-                      </div>
-                    ))}
+                    <NotificationPreferencesSetting />
                   </div>
                   <div>
                     <h3 className="text-xs font-semibold text-slate-700 mb-4">Idioma e fuso horário</h3>

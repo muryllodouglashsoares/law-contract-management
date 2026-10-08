@@ -5,6 +5,8 @@ import { validate } from '../../shared/http/validate';
 import { paymentController } from './payment.controller';
 import {
   createPaymentBodySchema,
+  generateInstallmentsBodySchema,
+  type GenerateInstallmentsBody,
   listPaymentsQuerySchema,
   paymentIdParamsSchema,
   registerPaymentBodySchema,
@@ -18,6 +20,19 @@ import {
 
 export async function paymentRoutes(app: FastifyInstance): Promise<void> {
   app.get('/summary', { preHandler: [authenticate] }, paymentController.summary);
+
+  // Parcelamento automático. Rotas estáticas ANTES de '/:id'. Mesmo nível de permissão de criar parcela.
+  app.post<{ Body: GenerateInstallmentsBody }>(
+    '/installments/preview',
+    { preHandler: [authenticate, validate({ body: generateInstallmentsBodySchema })] },
+    paymentController.previewInstallments,
+  );
+
+  app.post<{ Body: GenerateInstallmentsBody }>(
+    '/installments/generate',
+    { preHandler: [authenticate, validate({ body: generateInstallmentsBodySchema })] },
+    paymentController.generateInstallments,
+  );
 
   app.get<{ Querystring: ListPaymentsQuery }>(
     '/',

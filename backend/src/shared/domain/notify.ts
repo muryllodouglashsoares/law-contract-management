@@ -7,6 +7,8 @@ export interface NotificationInput {
   title: string;
   description: string;
   priority?: boolean;
+  /** Caminho relativo interno (ex.: /contratos/<id>). Sempre montado pelo backend. */
+  link?: string | null;
 }
 
 /**
@@ -19,5 +21,5 @@ export async function createNotification(
   prisma: Pick<PrismaClient, 'notification'>,
   input: NotificationInput,
 ): Promise<void> {
-  await prisma.notification.create({ data: { ...input, priority: input.priority ?? false } });
+  await prisma.notification.create({ data: { ...input, priority: input.priority ?? false, link: input.link ?? null } });
 }

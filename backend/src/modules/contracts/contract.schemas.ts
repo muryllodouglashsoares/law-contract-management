@@ -5,6 +5,7 @@ import { paginationQuerySchema } from '../../shared/http/pagination';
 export const contractStatusApiSchema = z.enum([
   'rascunho',
   'pronto_envio',
+  'aprovado',
   'enviado',
   'em_revisao',
   'assinado',
@@ -98,3 +99,20 @@ export const generateContractPdfBodySchema = z
   .object({ versionNumber: z.number().int().positive('Versão inválida').optional() })
   .optional();
 export type GenerateContractPdfBody = z.infer<typeof generateContractPdfBodySchema>;
+
+/** Renovação em um clique. `adjustmentPercent` opcional (ex.: 5.5 = +5,5%; negativo = redução). */
+export const renewContractBodySchema = z.object({
+  newEndDate: z.coerce.date({ message: 'Nova data de término inválida' }),
+  adjustmentPercent: z
+    .number({ message: 'Reajuste inválido' })
+    .gt(-100, 'O reajuste deve ser maior que -100%')
+    .max(1000, 'Reajuste muito alto')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-6, { message: 'Use no máximo 2 casas decimais' })
+    .optional(),
+});
+export type RenewContractBody = z.infer<typeof renewContractBodySchema>;
+
+export const rejectContractBodySchema = z.object({
+  reason: z.string().trim().min(3, 'Informe o motivo da devolução').max(1000),
+});
+export type RejectContractBody = z.infer<typeof rejectContractBodySchema>;

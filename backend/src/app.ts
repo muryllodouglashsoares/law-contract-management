@@ -10,12 +10,15 @@ import { auditRoutes } from './modules/audit/audit.routes';
 import { authRoutes } from './modules/auth/auth.routes';
 import { clientRoutes } from './modules/clients/client.routes';
 import { ContractRenewalJobService } from './modules/contract-renewal/contract-renewal-job.service';
+import { SignatureLinkAlertsJobService } from './modules/contract-signatures/signature-link-alerts-job.service';
+import { PaymentDueAlertsJobService } from './modules/payments/payment-due-alerts-job.service';
+import { notificationDispatcher } from './modules/notifications/notification.instance';
 import { publicSignatureRoutes } from './modules/contract-signatures/public-signature.routes';
 import { contractTemplateRoutes } from './modules/contract-templates/contract-template.routes';
 import { contractRoutes } from './modules/contracts/contract.routes';
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes';
 import { documentRoutes } from './modules/documents/document.routes';
-import { internalJobsRoutes, type RenewalJobRunner } from './modules/internal-jobs/internal-jobs.routes';
+import { internalJobsRoutes, type CountingJobRunner, type RenewalJobRunner } from './modules/internal-jobs/internal-jobs.routes';
 import { notificationRoutes } from './modules/notifications/notification.routes';
 import { pushService } from './modules/notifications/push.instance';
 import { officeRoutes } from './modules/offices/office.routes';
@@ -41,6 +44,9 @@ export interface BuildAppOptions {
   cronSecret?: string;
   /** Substitui o job de renovação (usado em testes unitários sem banco). */
   renewalJob?: RenewalJobRunner;
+  /** Substitui os jobs de alerta de pagamento / link de assinatura (testes sem banco). */
+  paymentAlertsJob?: CountingJobRunner;
+  signatureAlertsJob?: CountingJobRunner;
 }
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
@@ -167,6 +173,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     prefix: '/internal',
     cronSecret: options.cronSecret ?? env.CRON_SECRET,
     renewalJob: options.renewalJob ?? new ContractRenewalJobService(prisma, pushService),
+    paymentAlertsJob:
+      options.paymentAlertsJob ?? new PaymentDueAlertsJobService(prisma, notificationDispatcher, env.PAYMENT_ALERT_ENABLED),
+    signatureAlertsJob:
+      options.signatureAlertsJob ??
+      new SignatureLinkAlertsJobService(
+        prisma,
+        {
+          enabled: env.SIGNATURE_ALERT_ENABLED,
+          neverOpenedHours: env.SIGNATURE_ALERT_NEVER_OPENED_HOURS,
+          expiringHours: env.SIGNATURE_ALERT_EXPIRING_HOURS,
+        },
+        notificationDispatcher,
+      ),
   });
 
   return app;

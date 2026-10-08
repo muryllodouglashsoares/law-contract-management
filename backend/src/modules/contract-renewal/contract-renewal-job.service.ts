@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { AUDIT_ACTIONS, SYSTEM_ACTOR_LABEL, writeAuditLog } from '../../shared/domain/audit';
 import { createNotification } from '../../shared/domain/notify';
 import { RENEWAL_ALERT_CONTRACT_STATUSES } from '../../shared/domain/status-map';
+import { DAY_MS, daysUntil, formatDateBR, startOfUtcDay } from '../../shared/utils/dates';
 import { notifyPushEvent } from '../notifications/push-recipients';
 import { PUSH_EVENT_TYPES, type PushNotifier } from '../notifications/push.types';
 
@@ -11,7 +12,6 @@ export const RENEWAL_ALERT_WINDOW_DAYS = 30;
 /** A partir de quantos dias restantes a notificação é marcada como prioritária. */
 export const RENEWAL_ALERT_PRIORITY_DAYS = 7;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 200;
 
 export interface RenewalJobResult {
@@ -25,19 +25,8 @@ export interface RenewalJobResult {
 
 type PrismaDeps = Pick<PrismaClient, 'contract' | 'notification' | 'auditLog' | 'user' | '$transaction'>;
 
-export function startOfUtcDay(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
-/** Dias (inteiros, em dias-calendário UTC) entre `now` e `endDate`. 0 = vence hoje. */
-export function daysUntil(endDate: Date, now: Date): number {
-  return Math.round((startOfUtcDay(endDate).getTime() - startOfUtcDay(now).getTime()) / DAY_MS);
-}
-
-function formatDateBR(date: Date): string {
-  // endDate é uma data de calendário gravada em 00:00 UTC: formatar em UTC evita "voltar um dia".
-  return date.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
-}
+// Mantidos como re-exports: outros módulos e testes importam estes nomes daqui.
+export { daysUntil, startOfUtcDay };
 
 export function buildRenewalAlertDescription(input: {
   number: number;

@@ -7,6 +7,8 @@ import type {
   PaymentStatus,
 } from '@prisma/client';
 
+import { daysUntil } from '../utils/dates';
+
 /**
  * Camada única de tradução entre os enums do banco (em inglês, seguindo a
  * convenção já usada por UserRole/UserStatus) e os literais em português
@@ -32,6 +34,7 @@ function mapper<K extends string, V extends string>(map: Record<K, V>) {
 const CONTRACT_STATUS_MAP: Record<ContractStatus, string> = {
   RASCUNHO: 'rascunho',
   PRONTO_ENVIO: 'pronto_envio',
+  APROVADO: 'aprovado',
   ENVIADO: 'enviado',
   EM_REVISAO: 'em_revisao',
   ASSINADO: 'assinado',
@@ -49,7 +52,10 @@ export const CONTRACT_STATUS_FROM_API = mapper(invert(CONTRACT_STATUS_MAP));
  */
 const CONTRACT_STATUS_TRANSITIONS_MAP: Record<ContractStatus, ContractStatus[]> = {
   RASCUNHO: ['PRONTO_ENVIO', 'ENVIADO', 'CANCELADO'],
-  PRONTO_ENVIO: ['ENVIADO', 'CANCELADO'],
+  // PRONTO_ENVIO = aguardando revisão interna quando a aprovação está habilitada; o `reject` devolve
+  // para RASCUNHO. APROVADO só é alcançado pelo endpoint de aprovação (nunca por PATCH /status).
+  PRONTO_ENVIO: ['APROVADO', 'ENVIADO', 'RASCUNHO', 'CANCELADO'],
+  APROVADO: ['ENVIADO', 'RASCUNHO', 'CANCELADO'],
   ENVIADO: ['EM_REVISAO', 'ASSINADO', 'CANCELADO'],
   EM_REVISAO: ['ENVIADO', 'ASSINADO', 'CANCELADO'],
   ASSINADO: ['ATIVO', 'CANCELADO'],
@@ -59,6 +65,32 @@ const CONTRACT_STATUS_TRANSITIONS_MAP: Record<ContractStatus, ContractStatus[]> 
 };
 export function contractStatusTransitionsFrom(status: ContractStatus): ContractStatus[] {
   return CONTRACT_STATUS_TRANSITIONS_MAP[status] ?? [];
+}
+
+/**
+ * Transições que NÃO podem ser feitas por PATCH /contracts/:id/status mesmo estando no mapa acima:
+ *  - para APROVADO e a volta para RASCUNHO a partir de PRONTO_ENVIO/APROVADO têm endpoints próprios
+ *    (approve/reject), que registram auditoria, motivo e notificações.
+ * Com a aprovação interna ATIVA, o envio ao cliente (ENVIADO) só é permitido a partir de APROVADO.
+ */
+export function isTransitionBlockedForGenericStatusUpdate(
+  from: ContractStatus,
+  to: ContractStatus,
+  requireInternalApproval: boolean,
+): { blocked: boolean; reason?: string } {
+  if (to === 'APROVADO') {
+    return { blocked: true, reason: 'Use a ação "Aprovar" da revisão interna para aprovar o contrato.' };
+  }
+  if ((from === 'PRONTO_ENVIO' || from === 'APROVADO') && to === 'RASCUNHO') {
+    return { blocked: true, reason: 'Use a ação "Devolver" da revisão interna para devolver o contrato ao rascunho.' };
+  }
+  if (requireInternalApproval && to === 'ENVIADO' && from !== 'APROVADO' && from !== 'EM_REVISAO') {
+    return { blocked: true, reason: 'A aprovação interna está habilitada: o contrato precisa ser aprovado antes de ser enviado.' };
+  }
+  if (requireInternalApproval && to === 'PRONTO_ENVIO') {
+    return { blocked: true, reason: 'Use a ação "Enviar para revisão" para submeter o contrato à aprovação interna.' };
+  }
+  return { blocked: false };
 }
 
 /**
@@ -117,7 +149,9 @@ export function derivePaymentDisplayStatus(status: PaymentStatus, dueDate: Date,
   if (status === 'PAID') return 'pago';
   if (status === 'CANCELLED') return 'cancelado';
 
-  const daysUntilDue = Math.floor((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+  // Em dias-calendário UTC: uma parcela que vence HOJE ainda não está atrasada (o alerta diário
+  // trata "vence hoje" e "atrasada há 1 dia" como situações distintas).
+  const daysUntilDue = daysUntil(dueDate, now);
   if (daysUntilDue < 0) return 'atrasado';
   if (daysUntilDue <= SOON_THRESHOLD_DAYS) return 'pendente';
   return 'futuro';

@@ -8,6 +8,7 @@ export interface PublicOffice {
   document: string;
   address: string | null;
   specialties: string | null;
+  requireInternalApproval: boolean;
 }
 
 export function toPublicOffice(office: Office): PublicOffice {
@@ -19,5 +20,6 @@ export function toPublicOffice(office: Office): PublicOffice {
     document: office.document,
     address: office.address,
     specialties: office.specialties,
+    requireInternalApproval: office.requireInternalApproval,
   };
 }

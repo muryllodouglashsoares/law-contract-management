@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom';
 import { Bell, AlertCircle, CheckCircle, Info, Check, AlertTriangle } from 'lucide-react';
 import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
 import { notificationsService } from '../services/notifications';
@@ -17,7 +18,13 @@ const typeColor: Record<NotificationType, { icon: string; bg: string; border: st
   ERROR: { icon: '#DC2626', bg: '#FEF2F2', border: '#FECACA' },
 };
 
+/** Só caminhos internos do app (o backend os monta; a checagem evita qualquer URL externa ou `//host`). */
+function isInternalLink(link: string | null): link is string {
+  return typeof link === 'string' && link.startsWith('/') && !link.startsWith('//');
+}
+
 export default function NotificationsPage() {
+  const navigate = useNavigate();
   const { data, loading, error, refetch } = useApiQuery(
     () => notificationsService.list({ pageSize: 50 }),
     [],
@@ -101,6 +108,16 @@ export default function NotificationsPage() {
                       <div>
                         <div className="text-sm font-semibold text-slate-900">{n.title}</div>
                         <div className="text-sm text-slate-600 mt-0.5">{n.description}</div>
+                        {isInternalLink(n.link) && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); handleMarkRead(n.id); navigate(n.link!); }}
+                            className="mt-1.5 text-xs font-semibold underline"
+                            style={{ color: 'var(--color-accent)' }}
+                          >
+                            Abrir contrato
+                          </button>
+                        )}
                       </div>
                       {n.priority && (
                         <span className="text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>

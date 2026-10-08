@@ -16,6 +16,7 @@ import {
  *
  * Regras fixas (valem para qualquer política):
  *  - só usuários ATIVOS e do MESMO escritório do evento;
+ *  - usuários que desligaram o push (UserNotificationPreference.pushEnabled = false) não recebem;
  *  - deduplicação por usuário (um responsável que também é ADMIN recebe uma vez);
  *  - cada usuário recebe em todos os seus dispositivos (a entrega é do PushService);
  *  - ASSISTANT só recebe se a política listar explicitamente (ex.: regra `ROLE` com `ASSISTANT`
@@ -47,9 +48,22 @@ export type PolicyPushEvent = Exclude<PushEventType, 'TEST'>;
 export const PUSH_RECIPIENT_POLICY: Readonly<Record<PolicyPushEvent, readonly PushRecipientRule[]>> = {
   CONTRACT_SIGNED: [RULE_RESPONSIBLE, RULE_ADMINS],
   CONTRACT_RENEWAL: [RULE_RESPONSIBLE, RULE_ADMINS],
+  // Alertas financeiros e de link de assinatura: o responsável pelo contrato. ADMINs NÃO entram por
+  // padrão, para não gerar um push por parcela/link para todo o escritório (spam).
+  PAYMENT_DUE_SOON: [RULE_RESPONSIBLE],
+  PAYMENT_DUE_TODAY: [RULE_RESPONSIBLE],
+  PAYMENT_OVERDUE: [RULE_RESPONSIBLE, RULE_ADMINS],
+  SIGNATURE_NEVER_OPENED: [RULE_RESPONSIBLE],
+  SIGNATURE_EXPIRING: [RULE_RESPONSIBLE],
+  // Revisão interna: quem revisa recebe o pedido; quem enviou (passado como "responsável" do evento)
+  // recebe a decisão.
+  CONTRACT_REVIEW_SUBMITTED: [{ kind: 'ROLE', role: 'LAWYER' }, RULE_ADMINS],
+  CONTRACT_APPROVED: [RULE_RESPONSIBLE],
+  CONTRACT_REJECTED: [RULE_RESPONSIBLE],
 };
 
-export type PushRecipientPolicy = Readonly<Record<PolicyPushEvent, readonly PushRecipientRule[]>>;
+/** Política parcial: eventos sem entrada não têm destinatários (útil em testes e políticas customizadas). */
+export type PushRecipientPolicy = Readonly<Partial<Record<PolicyPushEvent, readonly PushRecipientRule[]>>>;
 
 export interface PushEventContext {
   /** Escritório do evento: nenhum destinatário de outro escritório é aceito. */
@@ -89,13 +103,15 @@ export async function resolvePushRecipients(
 
   const users = await prisma.user.findMany({
     where: { officeId: context.officeId, status: 'ACTIVE', OR: or },
-    select: { id: true, officeId: true, status: true, role: true },
+    select: { id: true, officeId: true, status: true, role: true, notificationPreference: { select: { pushEnabled: true } } },
   });
 
   const eligible = users.filter(
     (user) =>
       user.officeId === context.officeId &&
       user.status === 'ACTIVE' &&
+      // Preferência do usuário: pushEnabled = false silencia o Web Push (sem linha = ligado).
+      user.notificationPreference?.pushEnabled !== false &&
       (explicitIds.has(user.id) || roles.has(user.role)),
   );
 

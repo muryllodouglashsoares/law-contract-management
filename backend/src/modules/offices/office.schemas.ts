@@ -7,6 +7,7 @@ export const updateOfficeBodySchema = z
     phone: z.string().trim().max(30).optional(),
     address: z.string().trim().max(300).optional(),
     specialties: z.string().trim().max(300).optional(),
+    requireInternalApproval: z.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: 'Informe ao menos um campo para atualizar',

@@ -7,10 +7,12 @@ import type {
   CreateUserBody,
   ListUsersQuery,
   UpdateMeBody,
+  UpdateNotificationPreferencesBody,
   UpdateUserRoleBody,
   UpdateUserStatusBody,
   UserIdParams,
 } from './user.schemas';
+import { notificationPreferenceService } from '../notifications/notification.instance';
 import { UserService } from './user.service';
 
 const userService = new UserService(prisma);
@@ -22,6 +24,20 @@ const actorOf = (request: FastifyRequest) => ({
 });
 
 export const userController = {
+  /** Preferências de notificação do PRÓPRIO usuário (sempre pelo userId da sessão). */
+  async getNotificationPreferences(request: FastifyRequest, reply: FastifyReply) {
+    const preferences = await notificationPreferenceService.get(request.user.userId);
+    return reply.status(200).send({ preferences });
+  },
+
+  async updateNotificationPreferences(
+    request: FastifyRequest<{ Body: UpdateNotificationPreferencesBody }>,
+    reply: FastifyReply,
+  ) {
+    const preferences = await notificationPreferenceService.update(request.user.userId, request.body);
+    return reply.status(200).send({ preferences });
+  },
+
   async me(request: FastifyRequest, reply: FastifyReply) {
     const user = await userService.getById(request.user.userId);
     return reply.status(200).send({ user: toPublicUser(user) });

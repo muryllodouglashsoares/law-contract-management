@@ -23,6 +23,8 @@ const CONTRACT_INCLUDE = {
   client: { select: { id: true, name: true, document: true, email: true, phone: true } },
   template: { select: { id: true, name: true } },
   responsible: { select: { id: true, name: true } },
+  reviewSubmittedBy: { select: { id: true, name: true } },
+  reviewDecidedBy: { select: { id: true, name: true } },
   versions: { orderBy: { versionNumber: 'desc' as const }, take: 1 },
 };
 
@@ -72,7 +74,7 @@ export class DashboardService {
       this.prisma.client.count({ where: { officeId, status: 'ACTIVE', createdAt: { gte: startOfMonth } } }),
       this.prisma.contract.count({ where: { officeId, status: 'ATIVO' } }),
       this.prisma.contract.count({
-        where: { officeId, status: { in: ['PRONTO_ENVIO', 'ENVIADO', 'EM_REVISAO'] } },
+        where: { officeId, status: { in: ['PRONTO_ENVIO', 'APROVADO', 'ENVIADO', 'EM_REVISAO'] } },
       }),
       Promise.all(
         CHART_STATUSES.map((s) => this.prisma.contract.count({ where: { officeId, status: s.status } })),

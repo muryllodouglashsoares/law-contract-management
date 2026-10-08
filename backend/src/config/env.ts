@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+import { parseEncryptionKey } from '../shared/security/two-factor';
+
 /**
  * Schema das variáveis de ambiente da aplicação.
  * Qualquer variável obrigatória ausente ou inválida faz a aplicação
@@ -22,6 +24,15 @@ const NEON_S3_REQUIRED_VARS = [
 ] as const;
 
 const VAPID_VARS = ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'] as const;
+
+/** Booleano vindo de variável de ambiente ("true"/"false"). */
+const booleanEnv = (defaultValue: 'true' | 'false') =>
+  z
+    .enum(['true', 'false'])
+    .default(defaultValue)
+    .transform((value) => value === 'true');
+
+const EMAILJS_VARS = ['EMAILJS_SERVICE_ID', 'EMAILJS_TEMPLATE_ID', 'EMAILJS_PUBLIC_KEY', 'EMAILJS_PRIVATE_KEY'] as const;
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -118,6 +129,37 @@ const envSchema = z.object({
     { message: 'VAPID_SUBJECT deve ser "mailto:email@dominio" ou uma URL https' },
   ),
 
+  // Alertas automáticos (jobs diários chamados pelo GitHub Actions; ver internal-jobs).
+  PAYMENT_ALERT_ENABLED: booleanEnv('true'),
+  SIGNATURE_ALERT_ENABLED: booleanEnv('true'),
+  // Link enviado e nunca aberto há mais de N horas.
+  SIGNATURE_ALERT_NEVER_OPENED_HOURS: z.coerce.number().int().positive().max(24 * 30).default(24),
+  // Link que expira em até N horas.
+  SIGNATURE_ALERT_EXPIRING_HOURS: z.coerce.number().int().positive().max(24 * 30).default(24),
+
+  // E-mail automático (opcional; nenhum serviço pago é obrigatório). Com EMAIL_ENABLED=false ou
+  // EMAIL_PROVIDER=none o sistema continua funcional: apenas não envia e-mails.
+  //   none    → nenhum envio (padrão)
+  //   log     → NÃO envia; só registra no log que enviaria (desenvolvimento)
+  //   emailjs → API REST do EmailJS (exige as 4 variáveis EMAILJS_*)
+  EMAIL_ENABLED: booleanEnv('false'),
+  EMAIL_PROVIDER: z.enum(['none', 'log', 'emailjs']).default('none'),
+  EMAILJS_SERVICE_ID: optionalString,
+  EMAILJS_TEMPLATE_ID: optionalString,
+  EMAILJS_PUBLIC_KEY: optionalString,
+  // Chave PRIVADA (accessToken) do EmailJS: somente no backend, nunca no frontend nem no Git.
+  EMAILJS_PRIVATE_KEY: optionalString,
+
+  // 2FA (TOTP). Chave de 32 bytes (hex de 64 caracteres ou base64) que criptografa os segredos
+  // TOTP em repouso. Gere com: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  // Em PRODUÇÃO, sem esta variável o 2FA fica INDISPONÍVEL (não há chave implícita). Trocar a chave
+  // invalida os 2FA já configurados.
+  TWO_FACTOR_ENCRYPTION_KEY: optionalString.refine((value) => value === undefined || parseEncryptionKey(value) !== null, {
+    message: 'TWO_FACTOR_ENCRYPTION_KEY deve ter 32 bytes em hexadecimal (64 caracteres) ou base64',
+  }),
+  // Nome exibido no aplicativo autenticador.
+  TWO_FACTOR_ISSUER: z.string().trim().min(1).max(60).default('LexContract'),
+
   // Tamanho máximo de upload de um documento, em bytes. Mantido alinhado
   // com o texto já exibido na tela de Documentos ("Máx. 10 MB por arquivo").
   MAX_UPLOAD_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
@@ -135,6 +177,15 @@ const envSchema = z.object({
           path: [name],
           message: `${name} é obrigatória quando STORAGE_DRIVER=neon-s3`,
         });
+      }
+    }
+  }
+
+  // EmailJS é tudo-ou-nada: provider ativo sem credenciais falharia só no primeiro envio.
+  if (config.EMAIL_PROVIDER === 'emailjs') {
+    for (const name of EMAILJS_VARS) {
+      if (!config[name]) {
+        ctx.addIssue({ code: 'custom', path: [name], message: `${name} é obrigatória quando EMAIL_PROVIDER=emailjs` });
       }
     }
   }
@@ -191,4 +242,14 @@ if (env.NODE_ENV === 'production' && env.STORAGE_DRIVER === 'local') {
 if (env.NODE_ENV === 'production' && !env.VAPID_PUBLIC_KEY) {
   // eslint-disable-next-line no-console
   console.warn('⚠️  VAPID_* não definidas: o Web Push ficará desativado (notificações internas não são afetadas).');
+}
+
+if (env.NODE_ENV === 'production' && !env.TWO_FACTOR_ENCRYPTION_KEY) {
+  // eslint-disable-next-line no-console
+  console.warn('⚠️  TWO_FACTOR_ENCRYPTION_KEY não definida: o 2FA ficará INDISPONÍVEL (o login normal não é afetado).');
+}
+
+if (env.EMAIL_ENABLED && env.EMAIL_PROVIDER === 'none') {
+  // eslint-disable-next-line no-console
+  console.warn('⚠️  EMAIL_ENABLED=true com EMAIL_PROVIDER=none: nenhum e-mail automático será enviado.');
 }

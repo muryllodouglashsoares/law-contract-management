@@ -8,6 +8,22 @@ export const PUSH_EVENT_TYPES = {
   CONTRACT_SIGNED: 'CONTRACT_SIGNED',
   /** Contrato próximo do vencimento (job diário ContractRenewalJobService). */
   CONTRACT_RENEWAL: 'CONTRACT_RENEWAL',
+  /** Parcela vence em 3 dias (job PaymentDueAlertsJobService). */
+  PAYMENT_DUE_SOON: 'PAYMENT_DUE_SOON',
+  /** Parcela vence hoje. */
+  PAYMENT_DUE_TODAY: 'PAYMENT_DUE_TODAY',
+  /** Parcela em atraso há 1 dia. */
+  PAYMENT_OVERDUE: 'PAYMENT_OVERDUE',
+  /** Link de assinatura enviado e ainda não aberto (job SignatureLinkAlertsJobService). */
+  SIGNATURE_NEVER_OPENED: 'SIGNATURE_NEVER_OPENED',
+  /** Link de assinatura perto de expirar. */
+  SIGNATURE_EXPIRING: 'SIGNATURE_EXPIRING',
+  /** Assistente enviou um contrato para revisão interna. */
+  CONTRACT_REVIEW_SUBMITTED: 'CONTRACT_REVIEW_SUBMITTED',
+  /** Contrato aprovado na revisão interna. */
+  CONTRACT_APPROVED: 'CONTRACT_APPROVED',
+  /** Contrato devolvido na revisão interna. */
+  CONTRACT_REJECTED: 'CONTRACT_REJECTED',
   /** Push de teste enviado pelo próprio usuário aos seus dispositivos. */
   TEST: 'TEST',
 } as const;

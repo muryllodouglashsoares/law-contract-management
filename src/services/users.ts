@@ -1,5 +1,5 @@
 import { apiClient, type Paginated, type QueryParams } from '../lib/api-client';
-import type { User, UserRole, UserStatus } from '../types/api';
+import type { NotificationPreferences, User, UserRole, UserStatus } from '../types/api';
 
 export interface UpdateMeInput {
   name?: string;
@@ -32,6 +32,11 @@ export const usersService = {
   updateMe: (input: UpdateMeInput) => apiClient.patch<{ user: User }>('/users/me', input),
   changePassword: (input: { currentPassword: string; newPassword: string }) =>
     apiClient.patch<void>('/users/me/password', input),
+
+  getNotificationPreferences: () =>
+    apiClient.get<{ preferences: NotificationPreferences }>('/users/me/notification-preferences'),
+  updateNotificationPreferences: (input: Partial<NotificationPreferences>) =>
+    apiClient.patch<{ preferences: NotificationPreferences }>('/users/me/notification-preferences', input),
 
   // Gestão de usuários (ADMIN) — o escritório é sempre o da sessão, definido pelo backend.
   list: (params: ListUsersParams = {}) => apiClient.get<Paginated<User>>('/users', params),

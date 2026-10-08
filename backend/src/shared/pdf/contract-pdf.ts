@@ -11,6 +11,23 @@ import PDFDocument from 'pdfkit';
  * desse conjunto são substituídos por "?" em vez de sair corrompidos.
  */
 
+/**
+ * Dados do comprovante de aceite eletrônico (página final do PDF assinado). Todos vêm do registro
+ * de aceite gravado no banco (ContractPublicSignature) — nunca do frontend. O CPF/CNPJ chega JÁ
+ * MASCARADO; este módulo nunca recebe o documento completo.
+ */
+export interface AcceptanceReceiptInput {
+  signerName: string;
+  signerDocumentMasked: string;
+  signedAt: Date;
+  signerIp: string | null;
+  /** Hash da assinatura já existente (computeSignatureHash) — não é recalculado aqui. */
+  signatureHash: string;
+  consentTextVersion: string;
+  /** SHA-256 do conteúdo da versão aceita (o mesmo usado dentro do hash da assinatura). */
+  contentHash: string;
+}
+
 export interface ContractPdfInput {
   contract: { number: number };
   version: { versionNumber: number; content: string; createdAt: Date };
@@ -21,6 +38,10 @@ export interface ContractPdfInput {
     phone?: string | null;
     email?: string | null;
   };
+  /** Presente apenas no PDF FINAL: acrescenta a página "COMPROVANTE DE ACEITE ELETRÔNICO". */
+  acceptance?: AcceptanceReceiptInput;
+  /** Somente testes: `false` deixa os streams legíveis para inspecionar o texto. */
+  compress?: boolean;
 }
 
 export interface GeneratedPdf {
@@ -39,6 +60,11 @@ const MUTED = '#555555';
 /** Nome previsível e seguro: só dígitos derivados de dados numéricos do sistema. */
 export function contractPdfFileName(contractNumber: number, versionNumber: number): string {
   return `Contrato_${Math.trunc(contractNumber)}_v${Math.trunc(versionNumber)}.pdf`;
+}
+
+/** Nome do PDF final com comprovante de aceite (distinto do PDF original da versão). */
+export function signedContractPdfFileName(contractNumber: number, versionNumber: number): string {
+  return `Contrato_${Math.trunc(contractNumber)}_v${Math.trunc(versionNumber)}_assinado.pdf`;
 }
 
 // Caracteres representáveis nas fontes padrão do PDF (Windows-1252).
@@ -67,6 +93,67 @@ function formatDateBR(date: Date): string {
   return date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 }
 
+function formatTimeBR(date: Date): string {
+  return date.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour12: false });
+}
+
+/** Página final: comprovante de aceite eletrônico (aceite simples por link público de uso único). */
+function renderAcceptanceReceipt(
+  doc: PDFKit.PDFDocument,
+  input: { contractNumber: number; versionNumber: number; receipt: AcceptanceReceiptInput },
+  contentWidth: number,
+): void {
+  const { receipt } = input;
+  doc.addPage();
+
+  doc.font(SANS_BOLD).fontSize(14).fillColor('#111111').text('COMPROVANTE DE ACEITE ELETRÔNICO', { align: 'center' });
+  doc
+    .font(SANS)
+    .fontSize(8.5)
+    .fillColor(MUTED)
+    .text('Aceite eletrônico simples. Não se trata de assinatura digital ICP-Brasil.', { align: 'center' });
+  doc.moveDown(0.6);
+  const ruleY = doc.y;
+  doc.moveTo(MARGIN.left, ruleY).lineTo(MARGIN.left + contentWidth, ruleY).lineWidth(0.6).strokeColor('#999999').stroke();
+  doc.moveDown(1.2);
+
+  const rows: { label: string; value: string; mono?: boolean }[] = [
+    { label: 'Contrato nº', value: String(input.contractNumber) },
+    { label: 'Versão aceita', value: String(input.versionNumber) },
+    { label: 'Signatário', value: normalizePdfText(receipt.signerName) },
+    { label: 'CPF/CNPJ (mascarado)', value: receipt.signerDocumentMasked },
+    { label: 'Data do aceite', value: formatDateBR(receipt.signedAt) },
+    { label: 'Hora do aceite', value: `${formatTimeBR(receipt.signedAt)} (horário de Brasília)` },
+    { label: 'Endereço IP', value: receipt.signerIp ?? 'não registrado' },
+    { label: 'Forma do aceite', value: 'Link público de uso único' },
+    { label: 'Texto de consentimento (versão)', value: receipt.consentTextVersion },
+    { label: 'Hash SHA-256 do conteúdo da versão', value: receipt.contentHash, mono: true },
+    { label: 'Hash da assinatura (SHA-256)', value: receipt.signatureHash, mono: true },
+  ];
+
+  for (const row of rows) {
+    doc.font(SANS_BOLD).fontSize(8.5).fillColor(MUTED).text(row.label.toUpperCase(), MARGIN.left, doc.y, { width: contentWidth });
+    doc
+      .font(row.mono ? 'Courier' : SANS)
+      .fontSize(row.mono ? 8.5 : 11)
+      .fillColor('#000000')
+      .text(row.value, MARGIN.left, doc.y + 1, { width: contentWidth });
+    doc.moveDown(0.7);
+  }
+
+  doc.moveDown(0.8);
+  doc
+    .font(SANS)
+    .fontSize(8.5)
+    .fillColor(MUTED)
+    .text(
+      'Este comprovante foi gerado automaticamente a partir do registro do aceite. O hash da assinatura identifica o evento (signatário, data/hora, IP, versão e conteúdo aceitos) e permite verificar que o registro não foi alterado.',
+      MARGIN.left,
+      doc.y,
+      { width: contentWidth, align: 'justify' },
+    );
+}
+
 function officeDetailLines(office: ContractPdfInput['office']): string[] {
   const lines: string[] = [];
   if (office.document) lines.push(`CNPJ/CPF: ${office.document}`);
@@ -77,19 +164,20 @@ function officeDetailLines(office: ContractPdfInput['office']): string[] {
 }
 
 export async function generateContractPdf(input: ContractPdfInput): Promise<GeneratedPdf> {
-  const { contract, version, office } = input;
-  const label = `Contrato #${contract.number} · Versão ${version.versionNumber}`;
+  const { contract, version, office, acceptance } = input;
+  const label = `Contrato #${contract.number} · Versão ${version.versionNumber}${input.acceptance ? ' · Assinado' : ''}`;
 
   const doc = new PDFDocument({
     size: 'A4',
     margins: MARGIN,
     bufferPages: true, // necessário para escrever "Página X de Y" ao final
+    ...(input.compress === false ? { compress: false } : {}),
     info: {
-      Title: normalizePdfText(`Contrato Nº ${contract.number} — Versão ${version.versionNumber}`),
+      Title: normalizePdfText(`Contrato Nº ${contract.number} — Versão ${version.versionNumber}${acceptance ? ' (assinado)' : ''}`),
       Author: normalizePdfText(office.name),
-      Subject: 'Contrato',
-      // Data da versão (não a do momento da geração) => mesma versão, mesmo PDF.
-      CreationDate: version.createdAt,
+      Subject: acceptance ? 'Contrato com comprovante de aceite eletrônico' : 'Contrato',
+      // Data da versão / do aceite (não a do momento da geração) => mesmos dados, mesmo PDF.
+      CreationDate: acceptance ? acceptance.signedAt : version.createdAt,
     },
   });
 
@@ -138,6 +226,15 @@ export async function generateContractPdf(input: ContractPdfInput): Promise<Gene
     }
   }
 
+  // Comprovante de aceite (somente no PDF final) ------------------------
+  if (acceptance) {
+    renderAcceptanceReceipt(
+      doc,
+      { contractNumber: contract.number, versionNumber: version.versionNumber, receipt: acceptance },
+      contentWidth,
+    );
+  }
+
   // Rodapé com paginação ----------------------------------------------
   const range = doc.bufferedPageRange();
   for (let i = range.start; i < range.start + range.count; i += 1) {
@@ -163,7 +260,9 @@ export async function generateContractPdf(input: ContractPdfInput): Promise<Gene
 
   return {
     buffer,
-    fileName: contractPdfFileName(contract.number, version.versionNumber),
+    fileName: acceptance
+      ? signedContractPdfFileName(contract.number, version.versionNumber)
+      : contractPdfFileName(contract.number, version.versionNumber),
     mimeType: 'application/pdf',
   };
 }

@@ -5,7 +5,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { AUDIT_ACTIONS, writeAuditLog } from '../../shared/domain/audit';
 import { DOCUMENT_CATEGORY_FROM_API } from '../../shared/domain/status-map';
 import { env } from '../../config/env';
-import { NotFoundError } from '../../shared/errors';
+import { ConflictError, NotFoundError } from '../../shared/errors';
 import { paginationSkipTake, toPaginated, type Paginated, type PaginationQuery } from '../../shared/http/pagination';
 import { getStorage, removeQuietly, type StorageDriver } from '../../shared/storage';
 import { keyBelongsToOffice } from '../../shared/storage/storage-key';
@@ -18,6 +18,7 @@ const DOCUMENT_INCLUDE = {
   contract: { select: { id: true, number: true, client: { select: { id: true, name: true } } } },
   uploadedBy: { select: { id: true, name: true } },
   contractVersion: { select: { versionNumber: true } },
+  signature: { select: { contractVersion: { select: { versionNumber: true } } } },
 };
 
 export interface DocumentActor {
@@ -169,6 +170,9 @@ export class DocumentService {
 
   async remove(actor: DocumentActor, id: string): Promise<void> {
     const document = await this.getById(actor.officeId, id);
+    if (document.signatureId) {
+      throw new ConflictError('O PDF assinado é o comprovante do aceite eletrônico e não pode ser removido');
+    }
 
     await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.document.delete({ where: { id } });

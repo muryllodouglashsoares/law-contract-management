@@ -77,3 +77,13 @@ export type UpdateUserRoleBody = z.infer<typeof updateUserRoleBodySchema>;
 
 export const updateUserStatusBodySchema = z.object({ status: userStatusSchema }).strict();
 export type UpdateUserStatusBody = z.infer<typeof updateUserStatusBodySchema>;
+
+export const updateNotificationPreferencesBodySchema = z
+  .object({
+    emailEnabled: z.boolean().optional(),
+    whatsappEnabled: z.boolean().optional(),
+    pushEnabled: z.boolean().optional(),
+  })
+  .strict()
+  .refine((data) => Object.keys(data).length > 0, { message: 'Informe ao menos uma preferência para atualizar' });
+export type UpdateNotificationPreferencesBody = z.infer<typeof updateNotificationPreferencesBodySchema>;

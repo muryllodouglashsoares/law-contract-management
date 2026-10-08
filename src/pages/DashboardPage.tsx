@@ -6,6 +6,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
+import FinancialDashboard from '../components/FinancialDashboard';
 import StatusBadge from '../components/StatusBadge';
 import { useAuth } from '../contexts/AuthContext';
 import { useApiQuery, toErrorMessage } from '../hooks/useApiQuery';
@@ -292,6 +293,8 @@ export default function DashboardPage() {
           </div>
         </>
       )}
+
+      <FinancialDashboard />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { apiClient, type Paginated, type QueryParams } from '../lib/api-client';
-import type { Payment, PaymentMethodApi, PaymentStatusApi } from '../types/api';
+import type { InstallmentPreview, Payment, PaymentMethodApi, PaymentStatusApi } from '../types/api';
 
 export interface ListPaymentsParams extends QueryParams {
   page?: number;
@@ -16,6 +16,22 @@ export interface CreatePaymentInput {
   value: number;
   dueDate: string;
   notes?: string;
+  pixCode?: string | null;
+  pixKey?: string | null;
+  pixInstructions?: string | null;
+}
+
+export interface GenerateInstallmentsInput {
+  contractId: string;
+  totalValue: number;
+  installmentCount: number;
+  firstDueDate: string;
+}
+
+export interface UpdatePaymentInput extends Partial<Pick<CreatePaymentInput, 'value' | 'dueDate' | 'notes'>> {
+  pixCode?: string | null;
+  pixKey?: string | null;
+  pixInstructions?: string | null;
 }
 
 export const paymentsService = {
@@ -23,7 +39,12 @@ export const paymentsService = {
   list: (params: ListPaymentsParams = {}) => apiClient.get<Paginated<Payment>>('/payments', params),
   getById: (id: string) => apiClient.get<{ payment: Payment }>(`/payments/${id}`),
   create: (input: CreatePaymentInput) => apiClient.post<{ payment: Payment }>('/payments', input),
-  update: (id: string, input: Partial<Pick<CreatePaymentInput, 'value' | 'dueDate' | 'notes'>>) =>
+  /** Prévia calculada pelo BACKEND (centavos exatos, vencimentos com dia preservado). Não grava nada. */
+  previewInstallments: (input: GenerateInstallmentsInput) =>
+    apiClient.post<InstallmentPreview>('/payments/installments/preview', input),
+  generateInstallments: (input: GenerateInstallmentsInput) =>
+    apiClient.post<{ data: Payment[] }>('/payments/installments/generate', input),
+  update: (id: string, input: UpdatePaymentInput) =>
     apiClient.patch<{ payment: Payment }>(`/payments/${id}`, input),
   registerPayment: (id: string, input: { method: PaymentMethodApi; paidAt?: string }) =>
     apiClient.post<{ payment: Payment }>(`/payments/${id}/register`, input),

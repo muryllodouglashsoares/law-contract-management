@@ -26,3 +26,7 @@ export const signContractBodySchema = z.object({
   consent: z.literal(true, { message: 'É necessário confirmar o consentimento para assinar' }),
 });
 export type SignContractBody = z.infer<typeof signContractBodySchema>;
+
+/** Body opcional de POST /contracts/:id/signature-links. */
+export const createSignatureLinkBodySchema = z.object({ sendEmail: z.boolean().optional() }).optional();
+export type CreateSignatureLinkBody = z.infer<typeof createSignatureLinkBodySchema>;

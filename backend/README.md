@@ -629,3 +629,121 @@ aplicação recusa iniciar com configuração incompleta, de propósito.
 **`docker compose up` não sobe o backend.** Confirme que `JWT_SECRET` está
 definida no seu `.env` na raiz de `backend/` — o `docker-compose.yml` exige
 essa variável explicitamente e recusa subir sem ela.
+
+---
+
+## Alertas, financeiro, aprovação interna e 2FA
+
+Visão geral dos recursos adicionados em cima da arquitetura existente (nenhum foi substituído).
+
+### Migrations (aplicar na ordem; nenhuma migration antiga foi alterada)
+
+```bash
+cd backend
+npm ci
+npx prisma migrate deploy      # aplica 20261006000000 … 20261006000600
+npx prisma generate
+npm run build && npm test
+```
+
+| Migration | O que cria |
+| --- | --- |
+| `20261006000000_notification_preferences` | `user_notification_preferences` |
+| `20261006000100_payment_alerts_pix` | `payment_alert_events` (UNIQUE paymentId+type), `payments.pixCode/pixKey/pixInstructions`, índices de vencimento |
+| `20261006000200_signature_tracking_signed_pdf` | `contract_public_signatures.firstOpenedAt/lastOpenedAt/openCount`, `signature_link_alerts` (UNIQUE signatureId+type), `documents.signatureId` (UNIQUE) |
+| `20261006000300_internal_approval_renewal` | status `APROVADO`, `offices.requireInternalApproval`, campos de revisão em `contracts`, `contract_versions.changeNote` |
+| `20261006000400_email_deliveries` | `email_deliveries` |
+| `20261006000500_two_factor` | `user_two_factor`, `user_backup_codes` |
+| `20261006000600_notification_link` | `notifications.link` |
+
+### Novas rotas
+
+| Método | Rota | Quem |
+| --- | --- | --- |
+| POST | `/internal/jobs/payment-due-alerts` | `CRON_SECRET` |
+| POST | `/internal/jobs/signature-link-alerts` | `CRON_SECRET` |
+| GET/PATCH | `/users/me/notification-preferences` | autenticado (próprio usuário) |
+| POST | `/payments/installments/preview` · `/payments/installments/generate` | autenticado |
+| PATCH | `/payments/:id` (agora também `pixCode`, `pixKey`, `pixInstructions`) | autenticado |
+| POST | `/contracts/:id/signature-links` (body opcional `{ sendEmail: true }`) | ADMIN/LAWYER |
+| GET | `/contracts/:id/signed-pdf` | autenticado (gera sob demanda se faltar) |
+| POST | `/contracts/:id/renew` | ADMIN/LAWYER |
+| POST | `/contracts/:id/submit-review` | ADMIN/LAWYER/ASSISTANT (aprovação habilitada) |
+| POST | `/contracts/:id/approve` · `/contracts/:id/reject` | ADMIN/LAWYER |
+| GET | `/dashboard/receivables` · `/dashboard/receivables/export` (CSV) | autenticado |
+| GET | `/auth/2fa/status` | autenticado |
+| POST | `/auth/2fa/setup` · `/auth/2fa/verify-setup` · `/auth/2fa/disable` | ADMIN/LAWYER |
+| POST | `/auth/2fa/verify-login` | público (challenge + código), com rate limit do login |
+
+### Variáveis de ambiente novas
+
+`PAYMENT_ALERT_ENABLED`, `SIGNATURE_ALERT_ENABLED`, `SIGNATURE_ALERT_NEVER_OPENED_HOURS`, `SIGNATURE_ALERT_EXPIRING_HOURS`,
+`EMAIL_ENABLED`, `EMAIL_PROVIDER` (`none` | `log` | `emailjs`), `EMAILJS_SERVICE_ID`, `EMAILJS_TEMPLATE_ID`,
+`EMAILJS_PUBLIC_KEY`, `EMAILJS_PRIVATE_KEY`, `TWO_FACTOR_ENCRYPTION_KEY`, `TWO_FACTOR_ISSUER`. Detalhes em `.env.example`.
+
+### Jobs de alerta (GitHub Actions)
+
+`.github/workflows/alerts-cron.yml` roda todo dia às 11:05 UTC (08:05 BRT) e chama os dois endpoints acima em jobs
+paralelos, com os **mesmos secrets** do job de renovação (`BACKEND_URL`, `CRON_SECRET`). Execução manual:
+*Actions → Alerts cron → Run workflow*, ou:
+
+```bash
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://SEU-BACKEND/internal/jobs/payment-due-alerts
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://SEU-BACKEND/internal/jobs/signature-link-alerts
+```
+
+- **Pagamentos:** parcelas `PENDING` com vencimento em hoje+3 dias, hoje e ontem. Idempotência: `UNIQUE(paymentId, type)`.
+  Destinatário: responsável do contrato (no atraso, também ADMINs). Push sem valores nem nomes.
+- **Links de assinatura:** `SIGNATURE_NEVER_OPENED` (criado há mais de N h e nunca aberto) e `SIGNATURE_EXPIRING`
+  (expira em até N h). Não alerta link usado, revogado, expirado ou de versão/contrato que deixou de valer.
+- Ambos funcionam sem Web Push e sem e-mail; esses canais só entram quando configurados e permitidos nas preferências.
+
+### Canais de notificação
+
+`Notification` (in-app, criada na transação do evento) → `NotificationDispatcher` (pós-commit) → Web Push (política
+central + `pushEnabled`), e-mail (`emailEnabled` + provider configurado) e WhatsApp (adapter; hoje sem provider — o
+botão `wa.me` segue manual e nada é “simulado”).
+
+**E-mail (EmailJS, plano gratuito):** crie um serviço e um template com `{{to_email}} {{to_name}} {{subject}}
+{{message}}` e um botão/link `{{action_url}}` (texto `{{action_label}}`); habilite *Allow EmailJS API for non-browser
+applications*; preencha `EMAIL_ENABLED=true`, `EMAIL_PROVIDER=emailjs` e as 4 variáveis `EMAILJS_*`. Sem isso, o botão
+“Gerar e enviar por e-mail” informa que o envio automático está indisponível e o link continua sendo criado.
+`email_deliveries` guarda só o resultado (nunca o corpo nem o link).
+
+### PDF assinado
+
+Após o aceite, `SignedPdfService` gera o PDF final (contrato + página “COMPROVANTE DE ACEITE ELETRÔNICO”) e grava um
+`Document` com `signatureId` (UNIQUE ⇒ um por assinatura; o PDF original da versão continua em `contractVersionId`).
+Falha de storage nunca desfaz o aceite: registra auditoria (`SIGNED_PDF_FAILED`) e o PDF é regenerado na primeira
+chamada a `GET /contracts/:id/signed-pdf` (também cobre contratos assinados antes desta versão).
+
+### Aprovação interna
+
+`Configurações → Escritório → Exigir aprovação interna` (ADMIN). Com a opção ligada: ASSISTANT cria/edita rascunhos e
+usa *Enviar para revisão* (`PRONTO_ENVIO`); ADMIN/LAWYER *Aprovam* (`APROVADO`) ou *Devolvem* (com motivo, volta a
+`RASCUNHO`); o envio ao cliente (`ENVIADO`) só sai de `APROVADO`. Desligada, nada muda no fluxo atual.
+
+### Renovação
+
+`POST /contracts/:id/renew` atualiza `endDate`/`value` (Decimal), **cria uma nova `ContractVersion`** (a versão assinada
+e o PDF assinado ficam intactos), zera `renewalAlertSentAt`/`renewalAlertForEndDate` e audita `CONTRACT_RENEWED`.
+
+### 2FA (TOTP) — ADMIN e LAWYER
+
+Gere a chave e configure: `TWO_FACTOR_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")`.
+**Em produção, sem a chave o 2FA fica indisponível** (login normal intacto). Usuário: *Configurações → Segurança →
+Autenticação em dois fatores*: escanear o QR, confirmar o código, guardar os 10 códigos de recuperação (exibidos uma vez).
+Login: senha → `{ requiresTwoFactor, challengeToken }` (token HMAC de 5 min, **não é JWT**) → `/auth/2fa/verify-login`.
+Segredo criptografado com AES-256-GCM; códigos de recuperação só como HMAC; replay de TOTP bloqueado; 5 falhas ⇒ bloqueio de 5 min.
+
+### Pix copia e cola
+
+Cadastre o código na parcela (validação de formato/CRC16). Exibir/copiar/QR **não** altera o status: a baixa é sempre
+manual (`Registrar`, método PIX ⇒ auditoria `PIX_PAYMENT_REGISTERED`).
+
+### Dashboard financeiro
+
+`GET /dashboard/receivables?period=this_month|last_month|last_3_months|last_6_months|year|custom&from&to` e
+`/dashboard/receivables/export` (CSV UTF-8 com BOM, `;`, decimal com vírgula, em streaming). Cálculo em centavos
+(`bigint`) no PostgreSQL, sempre filtrado por `officeId`.
+

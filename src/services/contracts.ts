@@ -52,6 +52,28 @@ export const contractsService = {
       versionNumber !== undefined ? { versionNumber } : undefined,
     ),
   /** Gera um link público de uso único para aceite eletrônico (ADMIN/LAWYER). O link só é devolvido nesta resposta. */
-  createSignatureLink: (id: string) => apiClient.post<SignatureLink>(`/contracts/${id}/signature-links`),
+  createSignatureLink: (id: string, options: { sendEmail?: boolean } = {}) =>
+    apiClient.post<SignatureLink>(`/contracts/${id}/signature-links`, options.sendEmail ? { sendEmail: true } : undefined),
   listSignatures: (id: string) => apiClient.get<{ data: ContractSignatureRecord[] }>(`/contracts/${id}/signatures`),
+  /** Renovação em um clique (ADMIN/LAWYER): cria nova versão e reinicia os alertas de renovação. */
+  renew: (id: string, input: { newEndDate: string; adjustmentPercent?: number }) =>
+    apiClient.post<{ contract: Contract }>(`/contracts/${id}/renew`, input),
+
+  // Revisão interna (aprovação)
+  submitReview: (id: string) => apiClient.post<{ contract: Contract }>(`/contracts/${id}/submit-review`),
+  approve: (id: string) => apiClient.post<{ contract: Contract }>(`/contracts/${id}/approve`),
+  reject: (id: string, reason: string) => apiClient.post<{ contract: Contract }>(`/contracts/${id}/reject`, { reason }),
+
+  /** PDF FINAL com o comprovante de aceite (gerado sob demanda se necessário). */
+  async downloadSignedPdf(id: string, suggestedFileName: string): Promise<void> {
+    const { blob, fileName } = await apiClient.downloadBlob(`/contracts/${id}/signed-pdf`);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName ?? suggestedFileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  },
 };

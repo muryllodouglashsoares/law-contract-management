@@ -186,7 +186,7 @@ Mecanismos existentes e verificáveis no código:
 - **Validação com Zod** em body/params/querystring de toda rota que recebe entrada do cliente.
 - **CORS** restrito à(s) origem(ns) configurada(s) em `CORS_ORIGIN`.
 - **Isolamento multi-tenant por `officeId`**: toda query de leitura/escrita nos services filtra pelo escritório do usuário autenticado (`request.user.officeId`), nunca por um id vindo livremente do cliente.
-- **Endpoints públicos de aceite** protegidos por token aleatório (SHA-256 no banco), expiração, uso único transacional e rate limit próprio; o job interno de renovação usa `CRON_SECRET`, não o JWT.
+- **Endpoints públicos de aceite** protegidos por token aleatório (SHA-256 no banco), expiração, uso único transacional e rate limit próprio; os jobs internos (renovação, alertas de pagamento e de link de assinatura) usam `CRON_SECRET`, não o JWT. 2FA (TOTP) opcional para ADMIN/LAWYER, com segredo criptografado em repouso. Veja `backend/README.md` → *Alertas, financeiro, aprovação interna e 2FA*.
 - **Web Push**: a chave privada VAPID existe só no backend; subscriptions pertencem ao usuário autenticado, o `endpoint` só é aceito de serviços de push conhecidos (anti-SSRF) e o conteúdo do push é apenas um resumo sem dados sensíveis.
 - **Redação de dados sensíveis nos logs**: o logger (Pino) tem `redact` configurado para nunca logar o header `Authorization`, cookies, senha ou hash de senha (`backend/src/app.ts`).
 

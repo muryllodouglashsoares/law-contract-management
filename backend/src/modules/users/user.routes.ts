@@ -9,6 +9,8 @@ import {
   createUserBodySchema,
   listUsersQuerySchema,
   updateMeBodySchema,
+  updateNotificationPreferencesBodySchema,
+  type UpdateNotificationPreferencesBody,
   updateUserRoleBodySchema,
   updateUserStatusBodySchema,
   userIdParamsSchema,
@@ -34,6 +36,14 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     '/me/password',
     { preHandler: [authenticate, validate({ body: changePasswordBodySchema })] },
     userController.changePassword,
+  );
+
+  app.get('/me/notification-preferences', { preHandler: [authenticate] }, userController.getNotificationPreferences);
+
+  app.patch<{ Body: UpdateNotificationPreferencesBody }>(
+    '/me/notification-preferences',
+    { preHandler: [authenticate, validate({ body: updateNotificationPreferencesBodySchema })] },
+    userController.updateNotificationPreferences,
   );
 
   // Gestão de usuários: somente ADMIN, sempre no escritório da sessão.

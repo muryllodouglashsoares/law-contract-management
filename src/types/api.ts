@@ -28,6 +28,8 @@ export interface Office {
   document: string;
   address: string | null;
   specialties: string | null;
+  /** Aprovação interna: o envio ao cliente exige contrato APROVADO por um ADMIN/LAWYER. */
+  requireInternalApproval: boolean;
 }
 
 export type ClientType = 'PF' | 'PJ';
@@ -66,6 +68,7 @@ export interface ContractTemplate {
 export type ContractStatusApi =
   | 'rascunho'
   | 'pronto_envio'
+  | 'aprovado'
   | 'enviado'
   | 'em_revisao'
   | 'assinado'
@@ -91,6 +94,15 @@ export interface Contract {
   template: { id: string; name: string };
   responsible: { id: string; name: string };
   currentVersion: { versionNumber: number; content: string; createdAt: string } | null;
+  /** Último ciclo da revisão interna (aprovação). */
+  internalReview: {
+    submittedBy: { id: string; name: string } | null;
+    submittedAt: string | null;
+    decision: 'approved' | 'rejected' | null;
+    decidedBy: { id: string; name: string } | null;
+    decidedAt: string | null;
+    rejectionReason: string | null;
+  };
 }
 
 export interface ContractVersion {
@@ -113,6 +125,8 @@ export interface AppDocument {
   uploadedBy: { id: string; name: string };
   /** Versão do contrato que originou o arquivo (PDFs gerados); null em uploads manuais. */
   versionNumber: number | null;
+  /** true = PDF FINAL com o comprovante de aceite eletrônico ("PDF assinado"). */
+  signed: boolean;
   createdAt: string;
 }
 
@@ -129,6 +143,10 @@ export interface Payment {
   method: PaymentMethodApi | null;
   paidAt: string | null;
   notes: string | null;
+  /** Pix copia e cola. Exibir/copiar NÃO baixa a parcela: a baixa é sempre manual. */
+  pixCode: string | null;
+  pixKey: string | null;
+  pixInstructions: string | null;
   contract: { id: string; number: number; client: { id: string; name: string } };
   createdAt: string;
 }
@@ -142,6 +160,8 @@ export interface AppNotification {
   description: string;
   priority: boolean;
   read: boolean;
+  /** Caminho interno para abrir o contrato relacionado (ou null). */
+  link: string | null;
   createdAt: string;
 }
 
@@ -187,7 +207,11 @@ export interface SignatureLink {
   expiresAt: string;
   singleUse: true;
   versionNumber: number;
+  /** Resultado do envio por e-mail (somente quando solicitado). */
+  email?: SignatureEmailStatus;
 }
+
+export type SignatureEmailStatus = 'sent' | 'failed' | 'unavailable' | 'disabled_by_preference';
 
 export type SignatureLinkState = 'active' | 'used' | 'expired' | 'revoked';
 
@@ -202,6 +226,11 @@ export interface ContractSignatureRecord {
   signerDocumentMasked: string | null;
   signerIp: string | null;
   signatureHash: string | null;
+  firstOpenedAt: string | null;
+  lastOpenedAt: string | null;
+  openCount: number;
+  /** Documento do PDF assinado (comprovante), quando já gerado. */
+  signedDocumentId: string | null;
 }
 
 export interface PublicSignatureView {
@@ -227,4 +256,73 @@ export interface PublicSignatureResult {
   signatureHash: string;
   signerName: string;
   contractNumber: number;
+}
+
+// --- Preferências de notificação / 2FA ------------------------------------
+
+export interface NotificationPreferences {
+  emailEnabled: boolean;
+  whatsappEnabled: boolean;
+  pushEnabled: boolean;
+}
+
+export interface TwoFactorStatus {
+  /** false = servidor sem TWO_FACTOR_ENCRYPTION_KEY (produção): 2FA indisponível. */
+  available: boolean;
+  /** Somente ADMIN e LAWYER. */
+  eligible: boolean;
+  enabled: boolean;
+  enabledAt: string | null;
+  backupCodesRemaining: number;
+}
+
+export type LoginResponse =
+  | { accessToken: string; user: User }
+  | { requiresTwoFactor: true; challengeToken: string; expiresInSeconds: number };
+
+// --- Financeiro ----------------------------------------------------------
+
+export type ReceivablePeriod = 'this_month' | 'last_month' | 'last_3_months' | 'last_6_months' | 'year' | 'custom';
+
+export interface InstallmentPreviewItem {
+  installmentNumber: number;
+  installmentTotal: number;
+  value: number;
+  dueDate: string;
+}
+
+export interface InstallmentPreview {
+  totalValue: number;
+  installments: InstallmentPreviewItem[];
+  /** > 0 bloqueia a geração (o contrato já possui parcelas não canceladas). */
+  existingCount: number;
+  contractNumber: number;
+}
+
+export interface ReceivablesReport {
+  period: { key: ReceivablePeriod; from: string; to: string };
+  delinquency: {
+    overdueCount: number;
+    overdueTotal: number;
+    contractsWithOverdue: number;
+    maxDaysOverdue: number;
+    averageDaysOverdue: number;
+  };
+  revenue: { received: number; expected: number; overdue: number };
+  monthly: { month: string; received: number; expected: number; overdue: number }[];
+  statusDistribution: { status: string; label: string; count: number; total: number; color: string }[];
+  delinquencyTable: {
+    data: {
+      paymentId: string;
+      clientName: string;
+      contractId: string;
+      contractNumber: number;
+      installment: string;
+      value: number;
+      dueDate: string;
+      daysOverdue: number;
+      responsibleName: string;
+    }[];
+    pagination: { page: number; pageSize: number; total: number; totalPages: number };
+  };
 }
